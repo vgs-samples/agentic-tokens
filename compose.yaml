@@ -1,0 +1,17 @@
+services:
+  server:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "4200:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./public:/srv:ro
+      - caddy_data:/data
+volumes:
+  caddy_data:

@@ -1,0 +1,14 @@
+{
+  "name": "agentic-tokens-sample-app",
+  "version": "1.0.0",
+  "description": "Reference app for VGS Agentic Tokens API integration",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0"
+  }
+}
