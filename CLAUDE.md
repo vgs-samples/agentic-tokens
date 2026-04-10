@@ -13,21 +13,31 @@ cp .env.example .env   # fill in VGS_CLIENT_ID and VGS_CLIENT_SECRET
 docker compose up --build
 ```
 
-Open https://localhost:4200 (accept the self-signed cert). No build step, no tests, no linter.
+Open https://localhost:4200 (accept the self-signed cert).
+
+## Build & Lint (React client)
+
+```bash
+cd client-react
+npm run build    # tsc -b && vite build
+npm run lint     # eslint
+npm run dev      # local vite dev server (outside Docker)
+```
 
 ## Architecture
 
-Two Docker services behind a shared compose network:
+Three Docker services behind a shared compose network:
 
-- **Caddy** (`Caddyfile`) — static file server on HTTPS :443, mapped to host :4200. Serves everything in `client/`.
-- **Node server** (`server/server.js`) — Express API proxy on :3000. Handles OAuth token management (client_credentials flow against VGS auth) and proxies all VGS API calls so credentials never reach the browser. The frontend calls it via `http://localhost:3000/api/*`.
+- **Caddy** (`Caddyfile`) — HTTPS reverse proxy on :443, mapped to host :4200. Routes `/api/*` to the Node server and everything else to the Vite dev server. Handles TLS with a self-signed cert for `localhost`.
+- **Client** (`client-react/`) — Vite dev server on :5173. React + TypeScript + Tailwind. `src/` and `index.html` are volume-mounted for HMR.
+- **Server** (`server/server.js`) — Express API proxy on :3000. Handles OAuth token management (client_credentials flow against VGS auth) and proxies all VGS API calls so credentials never reach the browser.
 
-The frontend is vanilla JS (ES modules, no bundler). `client/app.js` drives the UI; `client/sdk/vgs-agentic-auth.js` is the VGS SDK for device binding (FIDO + OTP).
+The frontend uses same-origin relative URLs (`/api/*`) — all traffic flows through Caddy, no CORS needed.
 
 ## Directory Layout
 
-- `client/` — static frontend (HTML, CSS, JS, SDK). Served by Caddy.
-- `server/` — Node.js API proxy (server.js, package.json, Dockerfile).
+- `client-react/` — React + Vite + Tailwind frontend (TypeScript). Per-step components in `src/components/`.
+- `server/` — Node.js API proxy (server.js, package.json, Dockerfile). ESM (`"type": "module"`).
 
 ## API Routes (server.js)
 
@@ -45,6 +55,6 @@ All routes proxy to VGS APIs with a Bearer token. The two base URLs are `VGS_API
 
 ## Key Details
 
-- ESM throughout (`"type": "module"` in package.json).
-- No framework on the frontend — plain DOM manipulation with `window.*` function exports for onclick handlers.
-- The frontend talks to the server over plain HTTP (:3000) with CORS `*`. Caddy only serves static files and doesn't reverse-proxy to the server.
+- The VGS SDK (`client-react/src/vgs-agentic-auth.js`) is vanilla JS loaded via dynamic `import()` in `DeviceBinding.tsx`. It handles the Visa iframe lifecycle, FIDO ceremony, and OTP flow.
+- App state lives in a single `useAppState` hook — step progression, loading states, and shared IDs (cardId, tokenId, intentId, assuranceData) flow down as props.
+- Shared UI primitives (`Field`, `Row`, `Button`) are in `src/components/ui.tsx`. The `.input` Tailwind utility class is defined in `src/index.css`.
