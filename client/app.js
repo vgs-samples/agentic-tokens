@@ -208,6 +208,7 @@ window.authenticate = async function () {
     state.session.destroy();
     state.session = null;
 
+    $("assurance-data").value = JSON.stringify(assuranceData, null, 2);
     showResponse(3, { assuranceData });
     log("Step 3: Device binding complete");
     completeStep(3);
@@ -230,7 +231,7 @@ window.createIntent = async function () {
       type: "intents",
       attributes: {
         consumer_prompt: $("consumer-prompt").value,
-        assurance_data: state.assuranceData,
+        assurance_data: JSON.parse($("assurance-data").value),
         mandates: [
           {
             description: $("mandate-desc").value,
@@ -345,6 +346,7 @@ window.startOver = function () {
   $("card-id").value = "";
   $("token-id").value = "";
   $("intent-id").value = "";
+  $("assurance-data").value = "";
   $("otp-code").value = "";
   $("test-card").selectedIndex = 0;
   $("pan").value = "";
