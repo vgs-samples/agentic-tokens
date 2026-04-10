@@ -1,15 +1,10 @@
 import { useRef, useState } from "react";
 import { fetchAccessToken } from "../api";
-import { type AppState, type LogFn } from "../useAppState";
+import { type StepProps, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Button } from "./ui";
 
-interface Props {
-  state: AppState;
-  setState: React.Dispatch<React.SetStateAction<AppState>>;
-  log: LogFn;
-  setLoading: (step: number, on: boolean) => void;
-  completeStep: (step: number) => void;
+interface Props extends StepProps {
   consumerEmail: string;
   sessionRef: React.RefObject<unknown>;
 }
@@ -23,10 +18,7 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
   const [authVisible, setAuthVisible] = useState(false);
   const [authDisabled, setAuthDisabled] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  const done = state.completedSteps.has(3);
-  const loading = state.loadingSteps.has(3);
-  const disabled = !done && state.activeStep < 3;
+  const { done, loading, disabled } = useStepStatus(state, 3);
 
   async function handleStartSession() {
     setLoading(3, true);

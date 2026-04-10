@@ -1,17 +1,10 @@
 import { useState } from "react";
 import { api } from "../api";
-import { type AppState, type LogFn } from "../useAppState";
+import { type StepProps, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
-interface Props {
-  state: AppState;
-  log: LogFn;
-  setLoading: (step: number, on: boolean) => void;
-  completeStep: (step: number) => void;
-}
-
-export function GetCryptogram({ state, log, setLoading, completeStep }: Props) {
+export function GetCryptogram({ state, log, setLoading, completeStep }: StepProps) {
   const [txnAmount, setTxnAmount] = useState("5.33");
   const [txnCurrency, setTxnCurrency] = useState("USD");
   const [txnMerchant, setTxnMerchant] = useState("Best Buy");
@@ -20,9 +13,7 @@ export function GetCryptogram({ state, log, setLoading, completeStep }: Props) {
   const [response, setResponse] = useState<unknown>(null);
   const [finalResult, setFinalResult] = useState<unknown>(null);
 
-  const done = state.completedSteps.has(5);
-  const loading = state.loadingSteps.has(5);
-  const disabled = !done && state.activeStep < 5;
+  const { done, loading, disabled } = useStepStatus(state, 5);
 
   async function handleGet() {
     setLoading(5, true);

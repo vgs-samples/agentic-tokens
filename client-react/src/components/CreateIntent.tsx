@@ -1,18 +1,10 @@
 import { useState } from "react";
 import { api } from "../api";
-import { type AppState, type LogFn } from "../useAppState";
+import { type StepProps, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
-interface Props {
-  state: AppState;
-  setState: React.Dispatch<React.SetStateAction<AppState>>;
-  log: LogFn;
-  setLoading: (step: number, on: boolean) => void;
-  completeStep: (step: number) => void;
-}
-
-export function CreateIntent({ state, setState, log, setLoading, completeStep }: Props) {
+export function CreateIntent({ state, setState, log, setLoading, completeStep }: StepProps) {
   const [consumerPrompt, setConsumerPrompt] = useState("Allow monthly purchase up to $5.33 at Best Buy");
   const [mandateDesc, setMandateDesc] = useState("Monthly subscription");
   const [merchantName, setMerchantName] = useState("Best Buy");
@@ -23,9 +15,7 @@ export function CreateIntent({ state, setState, log, setLoading, completeStep }:
   const [effectiveUntil, setEffectiveUntil] = useState("2026-06-15T00:00:00Z");
   const [response, setResponse] = useState<unknown>(null);
 
-  const done = state.completedSteps.has(4);
-  const loading = state.loadingSteps.has(4);
-  const disabled = !done && state.activeStep < 4;
+  const { done, loading, disabled } = useStepStatus(state, 4);
 
   async function handleCreate() {
     setLoading(4, true);

@@ -1,23 +1,15 @@
 import { useState } from "react";
 import { api } from "../api";
-import { type AppState, type LogFn } from "../useAppState";
+import { type StepProps, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
-
-interface Props {
-  state: AppState;
-  setState: React.Dispatch<React.SetStateAction<AppState>>;
-  log: LogFn;
-  setLoading: (step: number, on: boolean) => void;
-  completeStep: (step: number) => void;
-}
 
 const TEST_CARDS = [
   { label: "...1569 / CVV 814", pan: "4622943123121569", cvv: "814" },
   { label: "...1478 / CVV 845", pan: "4622943123121478", cvv: "845" },
 ];
 
-export function CreateCard({ state, setState, log, setLoading, completeStep }: Props) {
+export function CreateCard({ state, setState, log, setLoading, completeStep }: StepProps) {
   const [pan, setPan] = useState("");
   const [cvv, setCvv] = useState("");
   const [expMonth, setExpMonth] = useState("12");
@@ -58,8 +50,7 @@ export function CreateCard({ state, setState, log, setLoading, completeStep }: P
     if (card) { setPan(card.pan); setCvv(card.cvv); }
   }
 
-  const done = state.completedSteps.has(1);
-  const loading = state.loadingSteps.has(1);
+  const { done, loading } = useStepStatus(state, 1);
 
   return (
     <Step num={1} title="Create Card" active={state.activeStep === 1} done={done} loading={loading} disabled={false} response={response}>

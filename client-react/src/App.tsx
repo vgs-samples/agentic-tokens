@@ -33,7 +33,7 @@ export default function App() {
       <EnrollToken state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} consumerEmail={consumerEmail} setConsumerEmail={setConsumerEmail} />
       <DeviceBinding state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} consumerEmail={consumerEmail} sessionRef={sessionRef} />
       <CreateIntent state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} />
-      <GetCryptogram state={state} log={log} setLoading={setLoading} completeStep={completeStep} />
+      <GetCryptogram state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} />
       <Log entries={logs} />
     </div>
   );

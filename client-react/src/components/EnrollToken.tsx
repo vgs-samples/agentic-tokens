@@ -1,25 +1,17 @@
 import { useState } from "react";
 import { api } from "../api";
-import { type AppState, type LogFn } from "../useAppState";
+import { type StepProps, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Button } from "./ui";
 
-interface Props {
-  state: AppState;
-  setState: React.Dispatch<React.SetStateAction<AppState>>;
-  log: LogFn;
-  setLoading: (step: number, on: boolean) => void;
-  completeStep: (step: number) => void;
+interface Props extends StepProps {
   consumerEmail: string;
   setConsumerEmail: (v: string) => void;
 }
 
 export function EnrollToken({ state, setState, log, setLoading, completeStep, consumerEmail, setConsumerEmail }: Props) {
   const [response, setResponse] = useState<unknown>(null);
-
-  const done = state.completedSteps.has(2);
-  const loading = state.loadingSteps.has(2);
-  const disabled = !done && state.activeStep < 2;
+  const { done, loading, disabled } = useStepStatus(state, 2);
 
   async function handleEnroll() {
     setLoading(2, true);
