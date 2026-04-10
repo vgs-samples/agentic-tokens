@@ -1,1 +1,5 @@
 @import "tailwindcss";
+
+.input {
+  @apply w-full p-2 border border-gray-300 rounded font-mono text-sm;
+}

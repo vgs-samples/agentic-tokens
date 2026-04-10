@@ -1,17 +1,19 @@
 services:
   server:
     build: ./server
-    ports:
-      - "3000:3000"
     env_file:
       - .env
+  client:
+    build: ./client-react
+    volumes:
+      - ./client-react/src:/app/src
+      - ./client-react/index.html:/app/index.html
   caddy:
     image: caddy:2-alpine
     ports:
       - "4200:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./client:/srv:ro
       - caddy_data:/data
 volumes:
   caddy_data:
