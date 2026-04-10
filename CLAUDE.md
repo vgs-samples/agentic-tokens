@@ -19,10 +19,15 @@ Open https://localhost:4200 (accept the self-signed cert). No build step, no tes
 
 Two Docker services behind a shared compose network:
 
-- **Caddy** (`Caddyfile`) — static file server on HTTPS :443, mapped to host :4200. Serves everything in `public/`.
-- **Node server** (`server.js`) — Express API proxy on :3000. Handles OAuth token management (client_credentials flow against VGS auth) and proxies all VGS API calls so credentials never reach the browser. The frontend calls it via `http://localhost:3000/api/*`.
+- **Caddy** (`Caddyfile`) — static file server on HTTPS :443, mapped to host :4200. Serves everything in `client/`.
+- **Node server** (`server/server.js`) — Express API proxy on :3000. Handles OAuth token management (client_credentials flow against VGS auth) and proxies all VGS API calls so credentials never reach the browser. The frontend calls it via `http://localhost:3000/api/*`.
 
-The frontend is vanilla JS (ES modules, no bundler). `public/app.js` drives the UI; `public/sdk/vgs-agentic-auth.js` is the VGS SDK for device binding (FIDO + OTP).
+The frontend is vanilla JS (ES modules, no bundler). `client/app.js` drives the UI; `client/sdk/vgs-agentic-auth.js` is the VGS SDK for device binding (FIDO + OTP).
+
+## Directory Layout
+
+- `client/` — static frontend (HTML, CSS, JS, SDK). Served by Caddy.
+- `server/` — Node.js API proxy (server.js, package.json, Dockerfile).
 
 ## API Routes (server.js)
 
