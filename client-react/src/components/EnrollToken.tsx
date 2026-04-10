@@ -46,7 +46,7 @@ export function EnrollToken({ state, setState, log, setLoading, completeStep, co
       <Field label="Consumer Email">
         <input className="input" value={consumerEmail} onChange={(e) => setConsumerEmail(e.target.value)} />
       </Field>
-      <Button onClick={handleEnroll}>Enroll</Button>
+      <Button onClick={handleEnroll} disabled={loading}>Enroll</Button>
     </Step>
   );
 }

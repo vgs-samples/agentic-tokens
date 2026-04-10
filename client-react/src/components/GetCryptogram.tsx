@@ -79,7 +79,7 @@ export function GetCryptogram({ state, log, setLoading, completeStep }: StepProp
         <Field label="Merchant URL">
           <input className="input" value={txnUrl} onChange={(e) => setTxnUrl(e.target.value)} />
         </Field>
-        <Button onClick={handleGet}>Get Cryptogram</Button>
+        <Button onClick={handleGet} disabled={loading}>Get Cryptogram</Button>
       </Step>
 
       {finalResult && (

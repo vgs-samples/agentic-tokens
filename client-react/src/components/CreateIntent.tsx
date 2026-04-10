@@ -95,7 +95,7 @@ export function CreateIntent({ state, setState, log, setLoading, completeStep }:
           <input className="input" value={effectiveUntil} onChange={(e) => setEffectiveUntil(e.target.value)} />
         </Field>
       </Row>
-      <Button onClick={handleCreate}>Create Intent</Button>
+      <Button onClick={handleCreate} disabled={loading}>Create Intent</Button>
     </Step>
   );
 }

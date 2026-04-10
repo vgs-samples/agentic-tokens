@@ -76,7 +76,7 @@ export function CreateCard({ state, setState, log, setLoading, completeStep }: S
           <input className="input" type="number" value={expYear} onChange={(e) => setExpYear(e.target.value)} />
         </Field>
       </Row>
-      <Button onClick={handleCreate}>Create Card</Button>
+      <Button onClick={handleCreate} disabled={loading}>Create Card</Button>
     </Step>
   );
 }

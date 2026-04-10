@@ -11,7 +11,7 @@ interface Props extends StepProps {
 
 export function DeviceBinding({ state, setState, log, setLoading, completeStep, consumerEmail, sessionRef }: Props) {
   const [response, setResponse] = useState<unknown>(null);
-  const [environment, setEnvironment] = useState("local");
+  const [environment, setEnvironment] = useState(import.meta.env.VITE_DEFAULT_ENVIRONMENT || "sandbox");
   const [otpVisible, setOtpVisible] = useState(false);
   const [otp, setOtp] = useState("");
   const [sessionStarted, setSessionStarted] = useState(false);
@@ -121,14 +121,14 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
           <option value="sandbox">Sandbox</option>
         </select>
       </Field>
-      <Button onClick={handleStartSession} disabled={sessionStarted}>Start Session</Button>
+      <Button onClick={handleStartSession} disabled={sessionStarted || loading}>Start Session</Button>
 
       {otpVisible && (
         <div className="mt-3 flex items-end gap-2">
           <Field label="OTP Code">
             <input className="input w-48" maxLength={6} placeholder="123456" value={otp} onChange={(e) => setOtp(e.target.value)} />
           </Field>
-          <Button onClick={handleSubmitOtp}>Submit OTP</Button>
+          <Button onClick={handleSubmitOtp} disabled={loading}>Submit OTP</Button>
         </div>
       )}
 
