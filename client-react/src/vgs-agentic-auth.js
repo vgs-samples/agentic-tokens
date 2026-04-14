@@ -381,7 +381,8 @@ class VgsAgenticAuth {
    * @param {string} [options.clientRefId] Unique trace ID (auto-generated if omitted)
    * @param {number} [options.timeout]     Timeout in ms for iframe operations (default 30000)
    */
-  constructor({ tokenId, environment, consumerEmail, accessToken, clientRefId, timeout } = {}) {
+  constructor({ tokenId, environment, consumerEmail, accessToken, clientRefId, timeout,
+               authenticationAmount, currencyCode, merchantName } = {}) {
     if (!tokenId) throw new VgsAgenticAuthError("tokenId is required");
     if (!environment) throw new VgsAgenticAuthError("environment is required");
     if (!consumerEmail) throw new VgsAgenticAuthError("consumerEmail is required");
@@ -401,6 +402,9 @@ class VgsAgenticAuth {
     this.timeout = timeout ?? 30_000;
     this._iframeOrigin = env.iframeOrigin;
     this._apiKey = env.apiKey;
+    this.authenticationAmount = authenticationAmount || "100";
+    this.currencyCode = currencyCode || "840";
+    this.merchantName = merchantName || "VGS Sample";
   }
 
   /**
@@ -478,6 +482,9 @@ class VgsAgenticAuth {
               consumer_email: this.consumerEmail,
               auth_type: "AUTHENTICATE",
               reason_code: "PAYMENT",
+              authentication_amount: this.authenticationAmount,
+              currency_code: this.currencyCode,
+              merchant_name: this.merchantName,
             },
           },
         },

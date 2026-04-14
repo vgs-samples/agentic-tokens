@@ -5,6 +5,7 @@ import { EnrollToken } from "./components/EnrollToken";
 import { DeviceBinding } from "./components/DeviceBinding";
 import { CreateIntent } from "./components/CreateIntent";
 import { GetCryptogram } from "./components/GetCryptogram";
+import { ConfirmTransaction } from "./components/ConfirmTransaction";
 import { Log } from "./components/Log";
 
 export default function App() {
@@ -34,6 +35,7 @@ export default function App() {
       <DeviceBinding state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} consumerEmail={consumerEmail} sessionRef={sessionRef} />
       <CreateIntent state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} />
       <GetCryptogram state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} />
+      <ConfirmTransaction state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} />
       <Log entries={logs} />
     </div>
   );

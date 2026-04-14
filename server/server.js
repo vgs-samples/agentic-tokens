@@ -154,6 +154,17 @@ app.post("/api/cryptograms", handler(async (req, res) => {
   res.status(status).json(data);
 }));
 
+// POST /api/confirmations — confirm transaction outcome (Agentic API)
+app.post("/api/confirmations", handler(async (req, res) => {
+  const { tokenId, intentId } = req.query;
+  const { status, data } = await callApi(
+    VGS_API_URL, "POST",
+    `/agentic-tokens/${tokenId}/intents/${intentId}/confirmations`,
+    req.body
+  );
+  res.status(status).json(data);
+}));
+
 // --- Start ---
 
 app.listen(PORT, () => {

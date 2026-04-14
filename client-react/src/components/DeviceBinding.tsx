@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { fetchAccessToken } from "../api";
 import { type StepProps, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
-import { Field, Button } from "./ui";
+import { Field, Row, Button } from "./ui";
 
 interface Props extends StepProps {
   consumerEmail: string;
@@ -12,6 +12,9 @@ interface Props extends StepProps {
 export function DeviceBinding({ state, setState, log, setLoading, completeStep, consumerEmail, sessionRef }: Props) {
   const [response, setResponse] = useState<unknown>(null);
   const [environment, setEnvironment] = useState(import.meta.env.VITE_DEFAULT_ENVIRONMENT || "sandbox");
+  const [authAmount, setAuthAmount] = useState("100");
+  const [currencyCode, setCurrencyCode] = useState("840");
+  const [merchantName, setMerchantName] = useState("VGS");
   const [otpVisible, setOtpVisible] = useState(false);
   const [otp, setOtp] = useState("");
   const [sessionStarted, setSessionStarted] = useState(false);
@@ -37,6 +40,9 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
         consumerEmail,
         accessToken,
         clientRefId,
+        authenticationAmount: authAmount,
+        currencyCode,
+        merchantName,
       });
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -120,6 +126,24 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
           <option value="local">Local</option>
           <option value="sandbox">Sandbox</option>
         </select>
+      </Field>
+      <Row>
+        <Field label="Authentication Amount">
+          <input className="input" value={authAmount} onChange={(e) => setAuthAmount(e.target.value)} />
+        </Field>
+        <Field label="Currency Code">
+          <select className="input" value={currencyCode} onChange={(e) => setCurrencyCode(e.target.value)}>
+            <option value="840">840 — USD</option>
+            <option value="978">978 — EUR</option>
+            <option value="826">826 — GBP</option>
+            <option value="392">392 — JPY</option>
+            <option value="036">036 — AUD</option>
+            <option value="124">124 — CAD</option>
+          </select>
+        </Field>
+      </Row>
+      <Field label="Merchant Name (optional)">
+        <input className="input" placeholder="e.g. Best Buy" value={merchantName} onChange={(e) => setMerchantName(e.target.value)} />
       </Field>
       <Button onClick={handleStartSession} disabled={sessionStarted || loading}>Start Session</Button>
 
