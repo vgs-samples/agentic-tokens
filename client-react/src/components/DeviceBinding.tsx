@@ -4,6 +4,8 @@ import { type StepProps, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
+const SANDBOX_OTP = "456789";
+
 interface Props extends StepProps {
   consumerEmail: string;
   sessionRef: React.RefObject<unknown>;
@@ -16,7 +18,7 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
   const [currencyCode, setCurrencyCode] = useState("840");
   const [merchantName, setMerchantName] = useState("VGS");
   const [otpVisible, setOtpVisible] = useState(false);
-  const [otp, setOtp] = useState("");
+  const [otp, setOtp] = useState(SANDBOX_OTP);
   const [sessionStarted, setSessionStarted] = useState(false);
   const [authVisible, setAuthVisible] = useState(false);
   const [authDisabled, setAuthDisabled] = useState(false);
@@ -150,7 +152,7 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
       {otpVisible && (
         <div className="mt-3 flex items-end gap-2">
           <Field label="OTP Code">
-            <input className="input w-48" maxLength={6} placeholder="123456" value={otp} onChange={(e) => setOtp(e.target.value)} />
+            <input className="input w-48" maxLength={6} placeholder={SANDBOX_OTP} value={otp} onChange={(e) => setOtp(e.target.value)} />
           </Field>
           <Button onClick={handleSubmitOtp} disabled={loading}>Submit OTP</Button>
         </div>
