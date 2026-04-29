@@ -60,7 +60,11 @@ async function getAccessToken() {
 async function callApi(baseUrl, method, path, body) {
   const token = await getAccessToken();
   const url = `${baseUrl}${path}`;
-  console.log(`→ ${method} ${url}`);
+  if (body) {
+    console.log(`→ ${method} ${url}\n  body: ${JSON.stringify(body)}`);
+  } else {
+    console.log(`→ ${method} ${url}`);
+  }
   const res = await fetch(url, {
     method,
     headers: {
@@ -70,7 +74,7 @@ async function callApi(baseUrl, method, path, body) {
     ...(body && { body: JSON.stringify(body) }),
   });
   const text = await res.text();
-  console.log(`← ${res.status} ${text.substring(0, 300)}`);
+  console.log(`← ${res.status} ${text.substring(0, 500)}`);
   const data = text ? JSON.parse(text) : null;
   return { status: res.status, data };
 }
@@ -80,8 +84,9 @@ function handler(fn) {
     try {
       await fn(req, res);
     } catch (err) {
-      console.error(`Error: ${err.message}`);
-      res.status(500).json({ error: err.message });
+      const cause = err.cause ? ` | cause: ${err.cause.code ?? err.cause.message ?? err.cause}` : "";
+      console.error(`Error: ${err.message}${cause}`);
+      res.status(500).json({ error: err.message, cause: err.cause?.message ?? err.cause?.code });
     }
   };
 }

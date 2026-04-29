@@ -126,7 +126,9 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
       <Field label="Environment">
         <select className="input" value={environment} onChange={(e) => setEnvironment(e.target.value)}>
           <option value="local">Local</option>
+          <option value="dev">Dev</option>
           <option value="sandbox">Sandbox</option>
+          <option value="live">Live</option>
         </select>
       </Field>
       <Row>

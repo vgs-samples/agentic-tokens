@@ -41,7 +41,7 @@ export function EnrollToken({ state, setState, log, setLoading, completeStep, co
   return (
     <Step num={2} title="Enroll Agentic Token" active={state.activeStep === 2} done={done} loading={loading} disabled={disabled} response={response}>
       <Field label="Card ID">
-        <input className="input" readOnly value={state.cardId ?? ""} />
+        <input className="input" value={state.cardId ?? ""} onChange={(e) => setState((s) => ({ ...s, cardId: e.target.value }))} />
       </Field>
       <Field label="Consumer Email">
         <input className="input" value={consumerEmail} onChange={(e) => setConsumerEmail(e.target.value)} />

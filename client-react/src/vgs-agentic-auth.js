@@ -6,7 +6,7 @@
  *
  *   const flow = new VgsAgenticAuth({ tokenId, apiBase });
  *   const session = await flow.startSession(container);
- *   if (session.needsOtp) await session.submitOtp("123456");
+ *   if (session.needsOtp) await session.submitOtp("456789");
  *   const assuranceData = await session.authenticate();
  *
  * @module vgs-agentic-auth
@@ -21,21 +21,32 @@ const ENVIRONMENTS = {
   local: {
     apiBase: "http://localhost:8081",
     iframeOrigin: "https://sbx.vts.auth.visa.com",
+    // public api key
+    apiKey: "WJHJ5RL6IHGG1OIRKWML21B9ihFOrGC-unbUUwYmPqRPF3YGs",
+  },
+  // Internal only. Not publicly documented.
+  dev: {
+    apiBase: "https://gw-01-sandbox.vgsapi.io",
+    iframeOrigin: "https://sbx.vts.auth.visa.com",
+    // public api key
     apiKey: "WJHJ5RL6IHGG1OIRKWML21B9ihFOrGC-unbUUwYmPqRPF3YGs",
   },
   sandbox: {
     apiBase: "https://gw-01-sandbox.vgsapi.com",
     iframeOrigin: "https://sbx.vts.auth.visa.com",
+    // public api key
     apiKey: "WJHJ5RL6IHGG1OIRKWML21B9ihFOrGC-unbUUwYmPqRPF3YGs",
   },
   live: {
-    apiBase: "https://vgsapi.com",
+    apiBase: "https://gw-01-live.vgsapi.com",
     iframeOrigin: "https://vts.auth.visa.com",
-    apiKey: "WJHJ5RL6IHGG1OIRKWML21B9ihFOrGC-unbUUwYmPqRPF3YGs",
+    // public api key
+    apiKey: "G908GCRYXDB09PTM2UCE21sH3cY2Sw4R2xovFpG5JDF57i-FQ"
   },
 };
 
-const CLIENT_APP_ID = "VGSVicProvisionToken";
+// const CLIENT_APP_ID = "VGSVicProvisionToken";
+const CLIENT_APP_ID = "VGS";
 
 // ---------------------------------------------------------------------------
 // Error
@@ -243,23 +254,6 @@ class Session {
       throw new VgsAgenticAuthError("OTP code must be a non-empty string");
     }
 
-    // Pick the best OTP method (prefer OTPSMS)
-    const method =
-      this.otpMethods.find((m) => m.method === "OTPSMS") ||
-      this.otpMethods[0];
-    if (!method) {
-      throw new VgsAgenticAuthError("No OTP methods available");
-    }
-
-    // Step 1: select the OTP delivery method
-    await _postJson(this._config.apiBase, `/agentic-tokens/${this._config.tokenId}/otp/${method.identifier}`, {
-      data: {
-        type: "otp_methods",
-        attributes: { client_ref_id: this._config.clientRefId },
-      },
-    }, this._config.accessToken);
-
-    // Step 2: submit the code
     const result = await _postJson(this._config.apiBase, `/agentic-tokens/${this._config.tokenId}/otp`, {
       data: {
         type: "otp_submissions",
@@ -382,7 +376,7 @@ class VgsAgenticAuth {
    * @param {number} [options.timeout]     Timeout in ms for iframe operations (default 30000)
    */
   constructor({ tokenId, environment, consumerEmail, accessToken, clientRefId, timeout,
-               authenticationAmount, currencyCode, merchantName } = {}) {
+                authenticationAmount, currencyCode, merchantName } = {}) {
     if (!tokenId) throw new VgsAgenticAuthError("tokenId is required");
     if (!environment) throw new VgsAgenticAuthError("environment is required");
     if (!consumerEmail) throw new VgsAgenticAuthError("consumerEmail is required");
@@ -404,7 +398,7 @@ class VgsAgenticAuth {
     this._apiKey = env.apiKey;
     this.authenticationAmount = authenticationAmount || "100";
     this.currencyCode = currencyCode || "840";
-    this.merchantName = merchantName || "VGS Sample";
+    this.merchantName = merchantName || null;
   }
 
   /**
@@ -484,7 +478,7 @@ class VgsAgenticAuth {
               reason_code: "PAYMENT",
               authentication_amount: this.authenticationAmount,
               currency_code: this.currencyCode,
-              merchant_name: this.merchantName,
+              ...(this.merchantName ? { merchant_name: this.merchantName } : {}),
             },
           },
         },
@@ -502,7 +496,7 @@ class VgsAgenticAuth {
       throw err;
     }
 
-    return new Session(
+    const session = new Session(
       this,
       iframeEl,
       requestID,
@@ -511,6 +505,31 @@ class VgsAgenticAuth {
       dfpSessionID || "",
       attestationResult,
     );
+
+    // Trigger OTP delivery immediately so the SMS arrives while the user is looking at the input.
+    if (session.needsOtp) {
+      const method =
+        session.otpMethods.find((m) => m.method === "OTPSMS") ||
+        session.otpMethods[0];
+      if (method) {
+        try {
+          await _postJson(
+            this.apiBase,
+            `/agentic-tokens/${this.tokenId}/otp/${method.identifier}`,
+            { data: { type: "otp_methods", attributes: { client_ref_id: this.clientRefId } } },
+            this.accessToken,
+          );
+        } catch (err) {
+          try {
+            _sendIframeCommand(iframeEl, this._iframeOrigin, requestID, { type: "CLOSE_AUTH_SESSION" });
+          } catch { /* ignore */ }
+          iframeEl.remove();
+          throw err;
+        }
+      }
+    }
+
+    return session;
   }
 }
 
