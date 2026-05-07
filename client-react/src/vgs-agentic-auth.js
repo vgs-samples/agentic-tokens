@@ -252,9 +252,7 @@ class Session {
    *
    * Only callable when `needsOtp` is true. The integrator must pick one of
    * `session.otpMethods` (the list returned from device attestation) and pass
-   * the full method object here. The library validates that the method belongs
-   * to the current session and POSTs to `/agentic-tokens/{tokenId}/otp/{identifier}`
-   * to trigger delivery.
+   * the full method object here.
    *
    * Re-callable: while OTP is pending, call this again to resend, or pass a
    * different method to switch channel (e.g. SMS → email).
@@ -262,17 +260,10 @@ class Session {
    * @param {object} method  One of `session.otpMethods` — must include `identifier`
    */
   async requestOtp(method) {
-    if (
-      this._state !== STATE_OTP_METHOD_PENDING &&
-      this._state !== STATE_OTP_PENDING
-    ) {
-      if (this._state === STATE_DESTROYED) {
-        throw new VgsAgenticAuthError("Session has been destroyed");
-      }
-      throw new VgsAgenticAuthError(
-        `Cannot call requestOtp() in state "${this._state}"`,
-      );
-    }
+    this._guardState(
+      [STATE_OTP_METHOD_PENDING, STATE_OTP_PENDING],
+      "requestOtp",
+    );
 
     if (!method || !method.identifier) {
       throw new VgsAgenticAuthError(
@@ -399,9 +390,10 @@ class Session {
     if (this._state === STATE_DESTROYED) {
       throw new VgsAgenticAuthError("Session has been destroyed");
     }
-    if (this._state !== expected) {
+    const allowed = Array.isArray(expected) ? expected : [expected];
+    if (!allowed.includes(this._state)) {
       throw new VgsAgenticAuthError(
-        `Cannot call ${method}() in state "${this._state}" (expected "${expected}")`,
+        `Cannot call ${method}() in state "${this._state}" (expected ${allowed.map((s) => `"${s}"`).join(" or ")})`,
       );
     }
   }

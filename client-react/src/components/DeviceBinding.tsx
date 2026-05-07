@@ -22,7 +22,7 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [otpMethods, setOtpMethods] = useState<any[]>([]);
   const [selectedMethodId, setSelectedMethodId] = useState("");
-  const [methodChosen, setMethodChosen] = useState(false);
+  const [otpDelivered, setOtpDelivered] = useState(false);
   const [sessionStarted, setSessionStarted] = useState(false);
   const [authVisible, setAuthVisible] = useState(false);
   const [authDisabled, setAuthDisabled] = useState(false);
@@ -59,7 +59,7 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
       if (session.needsOtp) {
         setOtpMethods(session.otpMethods);
         setSelectedMethodId(session.otpMethods[0]?.identifier ?? "");
-        setMethodChosen(false);
+        setOtpDelivered(false);
         setOtpVisible(true);
       } else {
         showAuth(session);
@@ -95,7 +95,7 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
     const session = sessionRef.current as any;
     try {
       await session.requestOtp(method);
-      setMethodChosen(true);
+      setOtpDelivered(true);
       log("Step 3: OTP delivery requested");
       setLoading(3, false);
     } catch (err: unknown) {
@@ -198,11 +198,11 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
               </select>
             </Field>
             <Button onClick={handleRequestOtp} disabled={loading || !selectedMethodId}>
-              {methodChosen ? "Resend OTP" : "Send OTP"}
+              {otpDelivered ? "Resend OTP" : "Send OTP"}
             </Button>
           </div>
 
-          {methodChosen && (
+          {otpDelivered && (
             <div className="mt-3 flex items-end gap-2">
               <Field label="OTP Code">
                 <input className="input w-48" maxLength={6} placeholder={SANDBOX_OTP} value={otp} onChange={(e) => setOtp(e.target.value)} />
