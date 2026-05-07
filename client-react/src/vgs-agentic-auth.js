@@ -2,11 +2,15 @@
  * VgsAgenticAuth — client-side library for Visa device binding.
  *
  * Wraps the iframe lifecycle, postMessage flow, API calls, and assuranceData
- * transformation into a simple 3-step API:
+ * transformation into a simple step-by-step API:
  *
- *   const flow = new VgsAgenticAuth({ tokenId, apiBase });
+ *   const flow = new VgsAgenticAuth({ tokenId, environment, consumerEmail });
  *   const session = await flow.startSession(container);
- *   if (session.needsOtp) await session.submitOtp("456789");
+ *   if (session.needsOtp) {
+ *     // integrator picks one of session.otpMethods (e.g. via UI)
+ *     await session.requestOtp(chosenMethod);
+ *     await session.submitOtp("456789");
+ *   }
  *   const assuranceData = await session.authenticate();
  *
  * @module vgs-agentic-auth
@@ -183,6 +187,7 @@ function _createIframe(container, origin, apiKey) {
 // Session
 // ---------------------------------------------------------------------------
 
+const STATE_OTP_METHOD_PENDING = "otp_method_pending";
 const STATE_OTP_PENDING = "otp_pending";
 const STATE_READY = "ready";
 const STATE_AUTHENTICATING = "authenticating";
@@ -222,7 +227,7 @@ class Session {
       attrs.status === "CHALLENGE" &&
       Array.isArray(attrs.stepUpRequest)
     ) {
-      this._state = STATE_OTP_PENDING;
+      this._state = STATE_OTP_METHOD_PENDING;
       this.needsOtp = true;
       this.otpMethods = attrs.stepUpRequest;
     } else {
@@ -243,8 +248,64 @@ class Session {
   }
 
   /**
-   * Submit an OTP code. Only callable when `needsOtp` is true.
-   * Selects the first OTPSMS method (or first available method) and submits the code.
+   * Request OTP delivery via the chosen method.
+   *
+   * Only callable when `needsOtp` is true. The integrator must pick one of
+   * `session.otpMethods` (the list returned from device attestation) and pass
+   * the full method object here. The library validates that the method belongs
+   * to the current session and POSTs to `/agentic-tokens/{tokenId}/otp/{identifier}`
+   * to trigger delivery.
+   *
+   * Re-callable: while OTP is pending, call this again to resend, or pass a
+   * different method to switch channel (e.g. SMS → email).
+   *
+   * @param {object} method  One of `session.otpMethods` — must include `identifier`
+   */
+  async requestOtp(method) {
+    if (
+      this._state !== STATE_OTP_METHOD_PENDING &&
+      this._state !== STATE_OTP_PENDING
+    ) {
+      if (this._state === STATE_DESTROYED) {
+        throw new VgsAgenticAuthError("Session has been destroyed");
+      }
+      throw new VgsAgenticAuthError(
+        `Cannot call requestOtp() in state "${this._state}"`,
+      );
+    }
+
+    if (!method || !method.identifier) {
+      throw new VgsAgenticAuthError(
+        "requestOtp requires a method object with an identifier (use one of session.otpMethods)",
+      );
+    }
+
+    const known = this.otpMethods.some(
+      (m) => m.identifier === method.identifier,
+    );
+    if (!known) {
+      throw new VgsAgenticAuthError(
+        "Unknown OTP method (not in session.otpMethods)",
+      );
+    }
+
+    await _postJson(
+      this._config.apiBase,
+      `/agentic-tokens/${this._config.tokenId}/otp/${method.identifier}`,
+      {
+        data: {
+          type: "otp_methods",
+          attributes: { client_ref_id: this._config.clientRefId },
+        },
+      },
+      this._config.accessToken,
+    );
+
+    this._state = STATE_OTP_PENDING;
+  }
+
+  /**
+   * Submit an OTP code. Must be called after `requestOtp` has triggered delivery.
    * @param {string} code  The OTP code entered by the cardholder
    */
   async submitOtp(code) {
@@ -505,29 +566,6 @@ class VgsAgenticAuth {
       dfpSessionID || "",
       attestationResult,
     );
-
-    // Trigger OTP delivery immediately so the SMS arrives while the user is looking at the input.
-    if (session.needsOtp) {
-      const method =
-        session.otpMethods.find((m) => m.method === "OTPSMS") ||
-        session.otpMethods[0];
-      if (method) {
-        try {
-          await _postJson(
-            this.apiBase,
-            `/agentic-tokens/${this.tokenId}/otp/${method.identifier}`,
-            { data: { type: "otp_methods", attributes: { client_ref_id: this.clientRefId } } },
-            this.accessToken,
-          );
-        } catch (err) {
-          try {
-            _sendIframeCommand(iframeEl, this._iframeOrigin, requestID, { type: "CLOSE_AUTH_SESSION" });
-          } catch { /* ignore */ }
-          iframeEl.remove();
-          throw err;
-        }
-      }
-    }
 
     return session;
   }

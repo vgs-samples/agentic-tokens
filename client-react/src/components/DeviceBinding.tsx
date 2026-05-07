@@ -19,6 +19,10 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
   const [merchantName, setMerchantName] = useState("VGS");
   const [otpVisible, setOtpVisible] = useState(false);
   const [otp, setOtp] = useState(SANDBOX_OTP);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [otpMethods, setOtpMethods] = useState<any[]>([]);
+  const [selectedMethodId, setSelectedMethodId] = useState("");
+  const [methodChosen, setMethodChosen] = useState(false);
   const [sessionStarted, setSessionStarted] = useState(false);
   const [authVisible, setAuthVisible] = useState(false);
   const [authDisabled, setAuthDisabled] = useState(false);
@@ -53,6 +57,9 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
       log("Step 3: Session created. needsOtp=" + session.needsOtp);
 
       if (session.needsOtp) {
+        setOtpMethods(session.otpMethods);
+        setSelectedMethodId(session.otpMethods[0]?.identifier ?? "");
+        setMethodChosen(false);
         setOtpVisible(true);
       } else {
         showAuth(session);
@@ -73,6 +80,29 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
     if (session?.iframe) {
       session.iframe.width = 300;
       session.iframe.height = 400;
+    }
+  }
+
+  async function handleRequestOtp() {
+    const method = otpMethods.find((m) => m.identifier === selectedMethodId);
+    if (!method) {
+      log("Step 3: Pick an OTP method first");
+      return;
+    }
+    setLoading(3, true);
+    log(`Step 3: Requesting OTP via ${method.method}...`);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const session = sessionRef.current as any;
+    try {
+      await session.requestOtp(method);
+      setMethodChosen(true);
+      log("Step 3: OTP delivery requested");
+      setLoading(3, false);
+    } catch (err: unknown) {
+      const e = err as { message: string; code?: string };
+      log("Step 3: requestOtp error — " + e.message);
+      setResponse({ error: e.message, code: e.code });
+      setLoading(3, false);
     }
   }
 
@@ -152,12 +182,35 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
       <Button onClick={handleStartSession} disabled={sessionStarted || loading}>Start Session</Button>
 
       {otpVisible && (
-        <div className="mt-3 flex items-end gap-2">
-          <Field label="OTP Code">
-            <input className="input w-48" maxLength={6} placeholder={SANDBOX_OTP} value={otp} onChange={(e) => setOtp(e.target.value)} />
-          </Field>
-          <Button onClick={handleSubmitOtp} disabled={loading}>Submit OTP</Button>
-        </div>
+        <>
+          <div className="mt-3 flex items-end gap-2">
+            <Field label="OTP Method">
+              <select
+                className="input w-48"
+                value={selectedMethodId}
+                onChange={(e) => setSelectedMethodId(e.target.value)}
+              >
+                {otpMethods.map((m) => (
+                  <option key={m.identifier} value={m.identifier}>
+                    {m.method}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Button onClick={handleRequestOtp} disabled={loading || !selectedMethodId}>
+              {methodChosen ? "Resend OTP" : "Send OTP"}
+            </Button>
+          </div>
+
+          {methodChosen && (
+            <div className="mt-3 flex items-end gap-2">
+              <Field label="OTP Code">
+                <input className="input w-48" maxLength={6} placeholder={SANDBOX_OTP} value={otp} onChange={(e) => setOtp(e.target.value)} />
+              </Field>
+              <Button onClick={handleSubmitOtp} disabled={loading}>Submit OTP</Button>
+            </div>
+          )}
+        </>
       )}
 
       {authVisible && (
