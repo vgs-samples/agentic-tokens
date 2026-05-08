@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useAppState } from "./useAppState";
+import { AppStateProvider, useAppState } from "./useAppState";
 import { CreateCard } from "./components/CreateCard";
 import { EnrollToken } from "./components/EnrollToken";
 import { DeviceBinding } from "./components/DeviceBinding";
@@ -9,7 +9,15 @@ import { ConfirmTransaction } from "./components/ConfirmTransaction";
 import { Log } from "./components/Log";
 
 export default function App() {
-  const { state, setState, logs, log, setLoading, completeStep, reset, sessionRef } = useAppState();
+  return (
+    <AppStateProvider>
+      <AppContent />
+    </AppStateProvider>
+  );
+}
+
+function AppContent() {
+  const { logs, reset } = useAppState();
   const [consumerEmail, setConsumerEmail] = useState("user@example.com");
 
   function handleReset() {
@@ -30,12 +38,12 @@ export default function App() {
       </div>
       <p className="text-gray-500 text-sm mb-6">Step-by-step integration reference for the VGS Agentic Tokens API</p>
 
-      <CreateCard state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} />
-      <EnrollToken state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} consumerEmail={consumerEmail} setConsumerEmail={setConsumerEmail} />
-      <DeviceBinding state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} consumerEmail={consumerEmail} sessionRef={sessionRef} />
-      <CreateIntent state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} />
-      <GetCryptogram state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} />
-      <ConfirmTransaction state={state} setState={setState} log={log} setLoading={setLoading} completeStep={completeStep} />
+      <CreateCard />
+      <EnrollToken consumerEmail={consumerEmail} setConsumerEmail={setConsumerEmail} />
+      <DeviceBinding consumerEmail={consumerEmail} />
+      <CreateIntent />
+      <GetCryptogram />
+      <ConfirmTransaction />
       <Log entries={logs} />
     </div>
   );

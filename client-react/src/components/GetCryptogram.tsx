@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { api } from "../api";
-import { type StepProps, useStepStatus } from "../useAppState";
+import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
-export function GetCryptogram({ state, log, setLoading, completeStep }: StepProps) {
+export function GetCryptogram() {
+  const { state, log, setLoading, completeStep } = useAppState();
+  const { loading } = useStepStatus(5);
   const [txnAmount, setTxnAmount] = useState("5.33");
   const [txnCurrency, setTxnCurrency] = useState("USD");
   const [txnMerchant, setTxnMerchant] = useState("Best Buy");
@@ -12,8 +14,6 @@ export function GetCryptogram({ state, log, setLoading, completeStep }: StepProp
   const [txnUrl, setTxnUrl] = useState("https://www.bestbuy.com");
   const [response, setResponse] = useState<unknown>(null);
   const [finalResult, setFinalResult] = useState<unknown>(null);
-
-  const { done, loading, disabled } = useStepStatus(state, 5);
 
   async function handleGet() {
     setLoading(5, true);
@@ -56,7 +56,7 @@ export function GetCryptogram({ state, log, setLoading, completeStep }: StepProp
 
   return (
     <>
-      <Step num={5} title="Get Payment Cryptogram" active={state.activeStep === 5} done={done} loading={loading} disabled={disabled} response={response}>
+      <Step num={5} title="Get Payment Cryptogram" response={response}>
         <Field label="Intent ID">
           <input className="input" readOnly value={state.intentId ?? ""} />
         </Field>

@@ -1,17 +1,17 @@
 import { useState } from "react";
 import { api } from "../api";
-import { type StepProps, useStepStatus } from "../useAppState";
+import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
-export function ConfirmTransaction({ state, log, setLoading, completeStep }: StepProps) {
+export function ConfirmTransaction() {
+  const { state, log, setLoading, completeStep } = useAppState();
+  const { loading } = useStepStatus(6);
   const [txnStatus, setTxnStatus] = useState("APPROVED");
   const [txnType, setTxnType] = useState("PURCHASE");
   const [txnAmount, setTxnAmount] = useState("5.33");
   const [txnCurrency, setTxnCurrency] = useState("USD");
   const [response, setResponse] = useState<unknown>(null);
-
-  const { done, loading, disabled } = useStepStatus(state, 6);
 
   async function handleConfirm() {
     setLoading(6, true);
@@ -54,7 +54,7 @@ export function ConfirmTransaction({ state, log, setLoading, completeStep }: Ste
   }
 
   return (
-    <Step num={6} title="Confirm Transaction" active={state.activeStep === 6} done={done} loading={loading} disabled={disabled} response={response}>
+    <Step num={6} title="Confirm Transaction" response={response}>
       <Field label="Intent ID">
         <input className="input" readOnly value={state.intentId ?? ""} />
       </Field>

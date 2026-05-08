@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { api } from "../api";
-import { type StepProps, useStepStatus } from "../useAppState";
+import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
-export function CreateIntent({ state, setState, log, setLoading, completeStep }: StepProps) {
+export function CreateIntent() {
+  const { state, setState, log, setLoading, completeStep } = useAppState();
+  const { loading } = useStepStatus(4);
   const [consumerPrompt, setConsumerPrompt] = useState("Allow monthly purchase up to $5.33 at Best Buy");
   const [mandateDesc, setMandateDesc] = useState("Monthly subscription");
   const [merchantName, setMerchantName] = useState("Best Buy");
@@ -14,8 +16,6 @@ export function CreateIntent({ state, setState, log, setLoading, completeStep }:
   const [quantity, setQuantity] = useState("1");
   const [effectiveUntil, setEffectiveUntil] = useState("2026-06-15T00:00:00Z");
   const [response, setResponse] = useState<unknown>(null);
-
-  const { done, loading, disabled } = useStepStatus(state, 4);
 
   async function handleCreate() {
     setLoading(4, true);
@@ -61,7 +61,7 @@ export function CreateIntent({ state, setState, log, setLoading, completeStep }:
   const assuranceJson = state.assuranceData ? JSON.stringify(state.assuranceData, null, 2) : "";
 
   return (
-    <Step num={4} title="Create Intent" active={state.activeStep === 4} done={done} loading={loading} disabled={disabled} response={response}>
+    <Step num={4} title="Create Intent" response={response}>
       <Field label="Assurance Data">
         <textarea className="input min-h-[60px] resize-y" readOnly rows={3} value={assuranceJson} />
       </Field>

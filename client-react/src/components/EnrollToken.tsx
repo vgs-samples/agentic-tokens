@@ -1,17 +1,18 @@
 import { useState } from "react";
 import { api } from "../api";
-import { type StepProps, useStepStatus } from "../useAppState";
+import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Button } from "./ui";
 
-interface Props extends StepProps {
+interface Props {
   consumerEmail: string;
   setConsumerEmail: (v: string) => void;
 }
 
-export function EnrollToken({ state, setState, log, setLoading, completeStep, consumerEmail, setConsumerEmail }: Props) {
+export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
+  const { state, setState, log, setLoading, completeStep } = useAppState();
+  const { loading } = useStepStatus(2);
   const [response, setResponse] = useState<unknown>(null);
-  const { done, loading, disabled } = useStepStatus(state, 2);
 
   async function handleEnroll() {
     setLoading(2, true);
@@ -39,7 +40,7 @@ export function EnrollToken({ state, setState, log, setLoading, completeStep, co
   }
 
   return (
-    <Step num={2} title="Enroll Agentic Token" active={state.activeStep === 2} done={done} loading={loading} disabled={disabled} response={response}>
+    <Step num={2} title="Enroll Agentic Token" response={response}>
       <Field label="Card ID">
         <input className="input" value={state.cardId ?? ""} onChange={(e) => setState((s) => ({ ...s, cardId: e.target.value }))} />
       </Field>

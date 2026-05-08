@@ -1,17 +1,18 @@
 import { useRef, useState } from "react";
 import { fetchAccessToken } from "../api";
-import { type StepProps, useStepStatus } from "../useAppState";
+import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
 const SANDBOX_OTP = "456789";
 
-interface Props extends StepProps {
+interface Props {
   consumerEmail: string;
-  sessionRef: React.RefObject<unknown>;
 }
 
-export function DeviceBinding({ state, setState, log, setLoading, completeStep, consumerEmail, sessionRef }: Props) {
+export function DeviceBinding({ consumerEmail }: Props) {
+  const { state, setState, log, setLoading, completeStep, sessionRef } = useAppState();
+  const { loading } = useStepStatus(3);
   const [response, setResponse] = useState<unknown>(null);
   const [environment, setEnvironment] = useState(import.meta.env.VITE_DEFAULT_ENVIRONMENT || "sandbox");
   const [authAmount, setAuthAmount] = useState("100");
@@ -27,7 +28,6 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
   const [authVisible, setAuthVisible] = useState(false);
   const [authDisabled, setAuthDisabled] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { done, loading, disabled } = useStepStatus(state, 3);
 
   async function handleStartSession() {
     setLoading(3, true);
@@ -149,9 +149,9 @@ export function DeviceBinding({ state, setState, log, setLoading, completeStep, 
   }
 
   return (
-    <Step num={3} title="Device Binding (FIDO / OTP)" active={state.activeStep === 3} done={done} loading={loading} disabled={disabled} response={response}>
+    <Step num={3} title="Device Binding (FIDO / OTP)" response={response}>
       <Field label="Token ID">
-        <input className="input" readOnly value={state.tokenId ?? ""} />
+        <input className="input" value={state.tokenId ?? ""} onChange={(e) => setState((s) => ({ ...s, tokenId: e.target.value }))} />
       </Field>
       <Field label="Environment">
         <select className="input" value={environment} onChange={(e) => setEnvironment(e.target.value)}>

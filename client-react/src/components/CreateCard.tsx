@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
-import { type StepProps, useStepStatus } from "../useAppState";
+import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
@@ -9,7 +9,9 @@ const TEST_CARDS = [
   { label: "...1478 / CVV 845", pan: "4622943123121478", cvv: "845" },
 ];
 
-export function CreateCard({ state, setState, log, setLoading, completeStep }: StepProps) {
+export function CreateCard() {
+  const { setState, log, setLoading, completeStep } = useAppState();
+  const { loading } = useStepStatus(1);
   const [pan, setPan] = useState("");
   const [cvv, setCvv] = useState("");
   const [expMonth, setExpMonth] = useState("12");
@@ -50,10 +52,8 @@ export function CreateCard({ state, setState, log, setLoading, completeStep }: S
     if (card) { setPan(card.pan); setCvv(card.cvv); }
   }
 
-  const { done, loading } = useStepStatus(state, 1);
-
   return (
-    <Step num={1} title="Create Card" active={state.activeStep === 1} done={done} loading={loading} disabled={false} response={response}>
+    <Step num={1} title="Create Card" response={response}>
       <Field label="Prefill Test Card">
         <select className="input" defaultValue="" onChange={(e) => prefill(parseInt(e.target.value))}>
           <option value="" disabled>-- select to prefill --</option>
