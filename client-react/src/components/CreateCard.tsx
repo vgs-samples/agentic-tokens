@@ -4,13 +4,6 @@ import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
-// VGS Collect inputs live inside cross-origin iframes — their values cannot be
-// set programmatically. We surface the sandbox test cards as a hint instead.
-const TEST_CARDS = [
-  { label: "...1569 / CVV 814 / 12/27", pan: "4622943123121569", cvv: "814", exp: "12 / 27" },
-  { label: "...1478 / CVV 845 / 12/27", pan: "4622943123121478", cvv: "845", exp: "12 / 27" },
-];
-
 const FIELD_CSS = {
   "font-size": "14px",
   "font-family": "ui-sans-serif, system-ui, sans-serif",
@@ -18,14 +11,42 @@ const FIELD_CSS = {
   "&::placeholder": { color: "#9ca3af" },
 };
 
+type CardOption = "card1" | "card2" | "custom";
+
+interface TestCard {
+  id: CardOption;
+  label: string;
+  pan: string;
+  cvv: string;
+  exp: string;
+}
+
+const TEST_CARDS: TestCard[] = [
+  { id: "card1", label: "Card 1 — ...1569 / CVV 814 / 12/27", pan: "4622943123121569", cvv: "814", exp: "12 / 27" },
+  { id: "card2", label: "Card 2 — ...1478 / CVV 845 / 12/27", pan: "4622943123121478", cvv: "845", exp: "12 / 27" },
+];
+
 export function CreateCard() {
   const { setState, log, setLoading, completeStep } = useAppState();
   const { loading } = useStepStatus(1);
   const [response, setResponse] = useState<unknown>(null);
-  const [formReady, setFormReady] = useState(false);
+  const [option, setOption] = useState<CardOption>("card1");
+  const [formInitialized, setFormInitialized] = useState(false);
+  // Derived "ready" state — set after fields for the current option finish loading.
+  // Comparing against the live `option` keeps the button disabled while remounting,
+  // without a synchronous setState in the effect body.
+  const [readyForOption, setReadyForOption] = useState<CardOption | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
   const formRef = useRef<VgsCollectForm | null>(null);
+  const fieldsRef = useRef<{
+    number?: VgsCollectField;
+    cvc?: VgsCollectField;
+    exp?: VgsCollectField;
+  }>({});
 
+  const fieldsReady = readyForOption === option;
+
+  // Create the Collect form once on mount.
   useEffect(() => {
     let cancelled = false;
 
@@ -42,38 +63,22 @@ export function CreateCard() {
           return;
         }
 
-        const form = window.VGSCollect.create(cfg.vaultId, cfg.vaultEnv);
+        const form = await window.VGSCollect.session({
+          vaultId: cfg.vaultId,
+          env: cfg.vaultEnv,
+          stateCallback: () => {},
+          authHandler: async () => await fetchAccessToken(),
+        });
+        if (cancelled) {
+          form?.destroy?.();
+          return;
+        }
         formRef.current = form;
-
-        form.field("#cc-number", {
-          type: "card-number",
-          name: "card_number",
-          placeholder: "4622 9431 2312 1569",
-          validations: ["required", "validCardNumber"],
-          showCardIcon: true,
-          css: FIELD_CSS,
-        });
-
-        form.field("#cc-cvc", {
-          type: "card-security-code",
-          name: "card_cvc",
-          placeholder: "CVV",
-          validations: ["required", "validCardSecurityCode"],
-          css: FIELD_CSS,
-        });
-
-        form.field("#cc-exp", {
-          type: "card-expiration-date",
-          name: "card_exp",
-          placeholder: "MM / YY",
-          validations: ["required", "validCardExpirationDate"],
-          yearLength: 2,
-          css: FIELD_CSS,
-        });
-
-        setFormReady(true);
+        setFormInitialized(true);
       } catch (err) {
-        setInitError("Failed to initialize Collect.js: " + (err as Error).message);
+        if (!cancelled) {
+          setInitError("Failed to initialize Collect.js: " + (err as Error).message);
+        }
       }
     }
 
@@ -85,21 +90,71 @@ export function CreateCard() {
     };
   }, []);
 
+  // (Re)create fields whenever the selected option changes.
+  // For card1/card2 — fields are created with prefillValue and prefilled after load.
+  // For custom — fields are created empty.
+  useEffect(() => {
+    if (!formInitialized || !formRef.current) return;
+    let cancelled = false;
+
+    // Tear down any existing fields so the iframes remount cleanly with new options.
+    fieldsRef.current.number?.delete();
+    fieldsRef.current.cvc?.delete();
+    fieldsRef.current.exp?.delete();
+    fieldsRef.current = {};
+
+    const card = TEST_CARDS.find((c) => c.id === option);
+    const form = formRef.current;
+
+    const numberField = form.cardNumberField("#cc-number", {
+      placeholder: "Card number",
+      css: FIELD_CSS,
+      showCardIcon: true,
+      ...(card && { prefillValue: card.pan }),
+    });
+    const cvcField = form.cardCVCField("#cc-cvc", {
+      placeholder: "CVV",
+      css: FIELD_CSS,
+      ...(card && { prefillValue: card.cvv }),
+    });
+    const expField = form.cardExpirationDateField("#cc-exp", {
+      placeholder: "MM / YY",
+      yearLength: 2,
+      css: FIELD_CSS,
+      ...(card && { prefillValue: card.exp }),
+    });
+    fieldsRef.current = { number: numberField, cvc: cvcField, exp: expField };
+
+    Promise.all([numberField.promise, cvcField.promise, expField.promise]).then(() => {
+      if (cancelled) return;
+      if (card) {
+        numberField.prefill();
+        cvcField.prefill();
+        expField.prefill();
+      }
+      setReadyForOption(option);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [formInitialized, option]);
+
   async function handleCreate() {
-    if (!formRef.current) return;
+    const form = formRef.current;
+    if (!form) return;
     setLoading(1, true);
     log("Step 1: Creating card via Collect.js…");
     try {
-      const accessToken = await fetchAccessToken();
-      const session = formRef.current.session({ accessToken });
-      const card = await session.createCard();
-      setResponse(card);
-      if (card?.id) {
-        setState((s) => ({ ...s, cardId: card.id }));
-        log(`Step 1: Card created — ${card.id}`);
+      const result = await form.createCard();
+      setResponse(result);
+      const cardId = result?.data?.data?.id;
+      if (cardId) {
+        setState((s) => ({ ...s, cardId }));
+        log(`Step 1: Card created — ${cardId}`);
         completeStep(1);
       } else {
-        log("Step 1: Failed — " + JSON.stringify(card));
+        log("Step 1: Failed — " + JSON.stringify(result));
         setLoading(1, false);
       }
     } catch (err) {
@@ -117,12 +172,17 @@ export function CreateCard() {
         </div>
       )}
 
-      <Field label="Test Cards (type these manually — iframes cannot be prefilled)">
-        <div className="text-xs text-gray-500 space-y-0.5">
-          {TEST_CARDS.map((c, i) => (
-            <div key={i} className="font-mono">{c.label}</div>
+      <Field label="Card Selection">
+        <select
+          className="input"
+          value={option}
+          onChange={(e) => setOption(e.target.value as CardOption)}
+        >
+          {TEST_CARDS.map((c) => (
+            <option key={c.id} value={c.id}>{c.label}</option>
           ))}
-        </div>
+          <option value="custom">Enter your own card</option>
+        </select>
       </Field>
 
       <Field label="Card Number">
@@ -137,8 +197,8 @@ export function CreateCard() {
         </Field>
       </Row>
 
-      <Button onClick={handleCreate} disabled={!formReady || loading}>
-        {formReady ? "Create Card" : "Loading Collect.js…"}
+      <Button onClick={handleCreate} disabled={!fieldsReady || loading}>
+        {fieldsReady ? "Create Card" : "Loading Collect.js…"}
       </Button>
     </Step>
   );
