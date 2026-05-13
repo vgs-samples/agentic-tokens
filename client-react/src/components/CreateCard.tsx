@@ -186,14 +186,14 @@ export function CreateCard() {
       </Field>
 
       <Field label="Card Number">
-        <div id="cc-number" className="input min-h-[36px] flex items-center" />
+        <div id="cc-number" className="input collect-field min-h-[36px] flex items-center" />
       </Field>
       <Row>
         <Field label="Expiration">
-          <div id="cc-exp" className="input min-h-[36px] flex items-center" />
+          <div id="cc-exp" className="input collect-field min-h-[36px] flex items-center" />
         </Field>
         <Field label="CVV">
-          <div id="cc-cvc" className="input min-h-[36px] flex items-center" />
+          <div id="cc-cvc" className="input collect-field min-h-[36px] flex items-center" />
         </Field>
       </Row>
 

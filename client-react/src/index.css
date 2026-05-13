@@ -4,7 +4,7 @@
   @apply w-full p-2 border border-gray-300 rounded font-mono text-sm;
 }
 
-iframe {
+.collect-field iframe {
   width: 100%;
   height: 28px;
 }
