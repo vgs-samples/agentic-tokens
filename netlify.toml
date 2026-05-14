@@ -10,6 +10,12 @@
   command = "npm ci --prefix client-react && npm --prefix client-react run build"
   publish = "client-react/dist"
 
+[build.environment]
+  # VGS API URLs and vault settings are public — exclude them from Netlify's
+  # secrets scanner (which would otherwise flag them when they appear both as
+  # env vars and as default strings in the bundled functions).
+  SECRETS_SCAN_OMIT_KEYS = "VGS_API_URL,VGS_CMP_API_URL,VGS_AUTH_URL,VGS_VAULT_ID,VGS_VAULT_ENV"
+
 [functions]
   directory    = "netlify/functions"
   node_bundler = "esbuild"
