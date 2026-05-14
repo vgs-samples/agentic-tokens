@@ -20,6 +20,8 @@ const VGS_CLIENT_SECRET = process.env.VGS_CLIENT_SECRET || "";
 const VGS_AUTH_URL =
   process.env.VGS_AUTH_URL ||
   "https://auth.verygoodsecurity.com/auth/realms/vgs/protocol/openid-connect/token";
+const VGS_VAULT_ID = process.env.VGS_VAULT_ID || "";
+const VGS_VAULT_ENV = process.env.VGS_VAULT_ENV || "sandbox";
 const PORT = process.env.PORT || 3000;
 
 // --- Token management ---
@@ -99,11 +101,14 @@ app.get("/api/token", handler(async (req, res) => {
   res.json({ access_token: token });
 }));
 
-// POST /api/cards — create a test card (CMP API)
-app.post("/api/cards", handler(async (req, res) => {
-  const { status, data } = await callApi(VGS_CMP_API_URL, "POST", "/cards", req.body);
-  res.status(status).json(data);
-}));
+// GET /api/config — runtime config for the browser (vault id, environment)
+// Keeps client builds env-agnostic: no Vite rebuild required when the vault changes.
+app.get("/api/config", (req, res) => {
+  res.json({ vaultId: VGS_VAULT_ID, vaultEnv: VGS_VAULT_ENV });
+});
+
+// NOTE: Step 1 (create card) now lives entirely in the browser via VGS Collect.js.
+// The PAN never touches this server, so there is no POST /api/cards proxy here.
 
 // POST /api/cards/:cardId/agentic-tokens — enroll card (Agentic API)
 app.post("/api/cards/:cardId/agentic-tokens", handler(async (req, res) => {

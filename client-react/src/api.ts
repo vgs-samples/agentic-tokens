@@ -12,3 +12,13 @@ export async function fetchAccessToken(): Promise<string> {
   const data = await res.json();
   return data.access_token;
 }
+
+export interface AppConfig {
+  vaultId: string;
+  vaultEnv: string;
+}
+
+export async function fetchConfig(): Promise<AppConfig> {
+  const res = await fetch("/api/config");
+  return res.json();
+}
