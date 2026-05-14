@@ -20,11 +20,12 @@
   directory    = "netlify/functions"
   node_bundler = "esbuild"
 
-# The browser calls /api/cards/:cardId/agentic-tokens — extract cardId into a query
-# param because Netlify Functions don't have path params on their own.
+# The browser calls /api/cards/:cardId/agentic-tokens. The function reads the
+# cardId out of the request path itself (Netlify doesn't substitute path
+# placeholders into the query string of `to`).
 [[redirects]]
-  from   = "/api/cards/:cardId/agentic-tokens"
-  to     = "/.netlify/functions/agentic-tokens?cardId=:cardId"
+  from   = "/api/cards/*/agentic-tokens"
+  to     = "/.netlify/functions/agentic-tokens"
   status = 200
 
 # Everything else under /api/* maps directly:
