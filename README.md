@@ -50,3 +50,25 @@ Each step auto-populates IDs into the next step.
 |---|---|---|
 | `VGS_API_URL` | `https://gw-01-sandbox.vgsapi.com` | `https://gw-01-live.vgsapi.com` |
 | `VGS_CMP_API_URL` | `https://sandbox.vgsapi.com` | `https://vgsapi.com` |
+
+## Deploy to Netlify
+
+The repo is set up to deploy as a Netlify site: the React build is served as static assets and the Express proxy is replaced by Netlify Functions that share the same VGS client (`server/vgs.js`).
+
+### Setup (one-time)
+
+1. In Netlify, **Add new site → Import from Git** and connect this repo.
+2. Build settings are picked up from `netlify.toml` — no overrides needed.
+3. Set **Site settings → Environment variables**: `VGS_CLIENT_ID`, `VGS_CLIENT_SECRET` (required), plus any optional VGS URLs / vault settings.
+4. **Branches → Production branch** = `main`. Every push to `main` triggers a fresh deploy.
+
+### Local development with Netlify Functions
+
+Docker (`docker compose up`) still works as before. To run the Netlify build locally instead:
+
+```bash
+npm install -g netlify-cli
+netlify dev
+```
+
+`netlify dev` serves the Vite frontend and emulates the Functions, so the local environment matches production.
