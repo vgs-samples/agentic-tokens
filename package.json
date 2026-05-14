@@ -1,0 +1,6 @@
+{
+  "name": "agentic-tokens-demo",
+  "private": true,
+  "type": "module",
+  "description": "Root manifest — ensures Netlify Functions and shared VGS modules are treated as ESM. Each subproject (client-react, server) keeps its own package.json with deps."
+}

@@ -1,0 +1,39 @@
+# Netlify configuration for the Agentic Tokens demo.
+#
+# Production deploys on every push to `main`.
+# Required env vars (set in Netlify UI → Site settings → Environment):
+#   VGS_CLIENT_ID, VGS_CLIENT_SECRET
+# Optional:
+#   VGS_API_URL, VGS_CMP_API_URL, VGS_AUTH_URL, VGS_VAULT_ID, VGS_VAULT_ENV
+
+[build]
+  command = "npm ci --prefix client-react && npm --prefix client-react run build"
+  publish = "client-react/dist"
+
+[functions]
+  directory    = "netlify/functions"
+  node_bundler = "esbuild"
+
+# The browser calls /api/cards/:cardId/agentic-tokens — extract cardId into a query
+# param because Netlify Functions don't have path params on their own.
+[[redirects]]
+  from   = "/api/cards/:cardId/agentic-tokens"
+  to     = "/.netlify/functions/agentic-tokens?cardId=:cardId"
+  status = 200
+
+# Everything else under /api/* maps directly:
+#   /api/token        → /.netlify/functions/token
+#   /api/config       → /.netlify/functions/config
+#   /api/intents      → /.netlify/functions/intents
+#   /api/cryptograms  → /.netlify/functions/cryptograms
+#   /api/confirmations → /.netlify/functions/confirmations
+[[redirects]]
+  from   = "/api/*"
+  to     = "/.netlify/functions/:splat"
+  status = 200
+
+# SPA fallback for client-side routing.
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
