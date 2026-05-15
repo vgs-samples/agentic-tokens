@@ -83,10 +83,4 @@ This repo also includes a local stdio MCP server in `mcp-server/`. It exposes a 
 4. opens the Visa device-binding page for purchase authentication,
 5. creates the intent and returns a VGS payment cryptogram.
 
-Run the sample app first, then point your MCP client at:
-
-```bash
-node /Users/flor/workspase/work/agentic-tokens/mcp-server/src/index.js
-```
-
-See `mcp-server/README.md` for the tool contract and environment variables.
+Run the sample app first, then point your MCP client at `mcp-server/src/index.js`. See `mcp-server/README.md` for copy-paste configs for Claude Code CLI, Claude Desktop, and Codex CLI, plus the tool contract and environment variables.
