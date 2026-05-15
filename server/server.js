@@ -144,6 +144,11 @@ app.post("/api/merchant/cards/:buyerId", (req, res) => {
   res.json({ buyerId: req.params.buyerId, cardId });
 });
 
+app.delete("/api/merchant/cards/:buyerId", (req, res) => {
+  const existed = merchantCards.delete(req.params.buyerId);
+  res.json({ buyerId: req.params.buyerId, deleted: existed });
+});
+
 app.get("/api/merchant/cards", (req, res) => {
   res.json(Object.fromEntries(merchantCards));
 });

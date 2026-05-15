@@ -69,7 +69,7 @@ export function CollectPage() {
 
   // (Re)create fields when option changes.
   useEffect(() => {
-    if (status !== "ready" && readyForOption === null) return;
+    if (status !== "ready") return;
     const form = formRef.current;
     if (!form) return;
     let cancelled = false;
@@ -105,7 +105,7 @@ export function CollectPage() {
     });
 
     return () => { cancelled = true; };
-  }, [status, option, readyForOption]);
+  }, [status, option]);
 
   async function handleSubmit() {
     const form = formRef.current;
