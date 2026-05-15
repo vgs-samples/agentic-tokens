@@ -72,3 +72,21 @@ netlify dev
 ```
 
 `netlify dev` serves the Vite frontend and emulates the Functions, so the local environment matches production.
+
+## MCP Agent Demo
+
+This repo also includes a local stdio MCP server in `mcp-server/`. It exposes a mock sneaker catalog and an agentic purchase tool:
+
+1. the agent searches mock products,
+2. asks the user to approve the exact product and price,
+3. opens the card collection page if the mock buyer has no card,
+4. opens the Visa device-binding page for purchase authentication,
+5. creates the intent and returns a VGS payment cryptogram.
+
+Run the sample app first, then point your MCP client at:
+
+```bash
+node /Users/flor/workspase/work/agentic-tokens/mcp-server/src/index.js
+```
+
+See `mcp-server/README.md` for the tool contract and environment variables.
