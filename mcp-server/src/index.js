@@ -69,7 +69,8 @@ const tools = [
       properties: {
         purchaseId: { type: "string", description: "Handle returned by propose_purchase." },
         approved: { type: "boolean", description: "Must be true only after the user explicitly approved the exact proposed product and price." },
-        useExistingCard: { type: "boolean", description: "When the buyer already has a card on file, set true to reuse it or false to force fresh card collection. Defaults to true." },
+        cardId: { type: "string", description: "Explicit cardId to charge. Pick one from propose_purchase.existingCards or list_buyer_cards. Omit to default to the most recent card." },
+        useExistingCard: { type: "boolean", description: "If false, force fresh card collection even when cards exist on file. Defaults to true." },
         consumerEmail: { type: "string", description: "Consumer email used for token enrollment and OTP." },
         waitForBrowser: { type: "boolean", description: "Wait for browser collection/authentication flows. Defaults to true." },
       },
@@ -79,13 +80,27 @@ const tools = [
     annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
   {
-    name: "forget_card",
-    title: "Forget stored card",
-    description: "Remove the cached card mapping for a buyer so the next purchase will prompt for fresh card details.",
+    name: "list_buyer_cards",
+    title: "List buyer cards",
+    description: "Return the cards on file for a buyer (cardId, lastFour, brand). Use this to let the user choose a card before purchase.",
     inputSchema: {
       type: "object",
       properties: {
         buyerId: { type: "string", description: "Merchant-side buyer id. Defaults to demo-buyer." },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "forget_card",
+    title: "Forget stored card",
+    description: "Remove a stored card mapping. Provide cardId to drop one card, or omit it to clear all cards for the buyer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        buyerId: { type: "string", description: "Merchant-side buyer id. Defaults to demo-buyer." },
+        cardId: { type: "string", description: "Optional: drop only this card. Omit to forget every card for the buyer." },
       },
       additionalProperties: false,
     },
@@ -97,6 +112,7 @@ const handlers = {
   search_products: handleSearchProducts,
   propose_purchase: handleProposePurchase,
   purchase_approved_product: handlePurchaseApprovedProduct,
+  list_buyer_cards: handleListBuyerCards,
   forget_card: handleForgetCard,
 };
 
@@ -194,7 +210,7 @@ async function handleProposePurchase(args) {
 
   const purchaseId = createId("purchase");
   const buyerId = args.buyerId || defaultBuyerId;
-  const existingCardId = await getCardForBuyer(buyerId);
+  const cardsOnFile = await getCardsForBuyer(buyerId);
   const purchase = {
     id: purchaseId,
     buyerId,
@@ -205,16 +221,19 @@ async function handleProposePurchase(args) {
   purchases.set(purchaseId, purchase);
 
   const approvalText = `Approve purchase ${purchaseId}: ${product.title} (${product.color}) for ${formatMoney(product)} at ${product.merchantName}.`;
-  const nextStep = existingCardId
-    ? "Ask the user to approve the exact product and price, AND ask whether to use the card already on file or enter a new one. Then call purchase_approved_product with approved=true and useExistingCard=true|false."
-    : "Ask the user to approve the exact product and price, then call purchase_approved_product with approved=true. They will be prompted to enter card details in a browser tab.";
+  const existingCards = cardsOnFile.map((c) => ({ ...c, label: formatCardLabel(c) }));
+  const nextStep = existingCards.length === 0
+    ? "Ask the user to approve the exact product and price, then call purchase_approved_product with approved=true. They will be prompted to enter card details in a browser tab."
+    : existingCards.length === 1
+      ? "Ask the user to approve the exact product and price, AND ask whether to use the card on file or enter a new one. Then call purchase_approved_product with approved=true plus cardId of the chosen card, or useExistingCard=false to collect a new one."
+      : "Ask the user to approve the exact product and price, AND ask which stored card to use (show labels) or whether to enter a new one. Then call purchase_approved_product with approved=true plus the chosen cardId, or useExistingCard=false to collect a new one.";
   return {
     purchaseId,
     approvalRequired: true,
     approvalText,
     buyerId,
     product,
-    existingCard: existingCardId ? { onFile: true } : null,
+    existingCards,
     nextStep,
   };
 }
@@ -241,7 +260,12 @@ async function handlePurchaseApprovedProduct(args) {
   // Sticky flag — once the agent asks for a new card, force collection even on resume.
   if (args.useExistingCard === false) purchase.forceNewCard = true;
 
-  let cardId = purchase.cardId ?? (purchase.forceNewCard ? null : await getCardForBuyer(buyerId));
+  // Resolve cardId: prior pick > explicit pick from agent > forced fresh > most-recent saved.
+  let cardId = purchase.cardId ?? args.cardId ?? null;
+  if (!cardId && !purchase.forceNewCard) {
+    const cards = await getCardsForBuyer(buyerId);
+    if (cards.length > 0) cardId = cards[0].cardId;
+  }
   let collect = purchase.collect ?? null;
   if (!cardId && previousStatus === "waiting_for_card" && collect) {
     const cardSession = waitForBrowser
@@ -389,25 +413,40 @@ async function handlePurchaseApprovedProduct(args) {
   return result;
 }
 
-async function getCardForBuyer(buyerId) {
+async function getCardsForBuyer(buyerId) {
   try {
     const response = await apiFetch(`/merchant/cards/${encodeURIComponent(buyerId)}`, { allow404: true });
-    return response?.cardId ?? null;
+    return Array.isArray(response?.cards) ? response.cards : [];
   } catch (err) {
-    // Server unreachable during approval flow — treat as no card on file.
-    log(`getCardForBuyer fallback: ${err.message}`);
-    return null;
+    // Server unreachable during approval flow — treat as no cards on file.
+    log(`getCardsForBuyer fallback: ${err.message}`);
+    return [];
   }
+}
+
+function formatCardLabel(card) {
+  const tag = card.lastFour ? `••••${card.lastFour}` : card.cardId.slice(-6);
+  return card.brand ? `${card.brand} ${tag}` : tag;
+}
+
+async function handleListBuyerCards(args) {
+  const buyerId = args.buyerId || defaultBuyerId;
+  const cards = await getCardsForBuyer(buyerId);
+  return {
+    buyerId,
+    cards: cards.map((c) => ({ ...c, label: formatCardLabel(c) })),
+  };
 }
 
 async function handleForgetCard(args) {
   const buyerId = args.buyerId || defaultBuyerId;
-  const response = await apiFetch(`/merchant/cards/${encodeURIComponent(buyerId)}`, {
-    method: "DELETE",
-    allow404: true,
-  });
+  const path = args.cardId
+    ? `/merchant/cards/${encodeURIComponent(buyerId)}?cardId=${encodeURIComponent(args.cardId)}`
+    : `/merchant/cards/${encodeURIComponent(buyerId)}`;
+  const response = await apiFetch(path, { method: "DELETE", allow404: true });
   return {
     buyerId,
+    cardId: args.cardId ?? null,
     forgotten: Boolean(response?.deleted),
   };
 }
@@ -576,7 +615,10 @@ function formatToolText(name, result) {
     return result.products.map((product) => `${product.id}: ${product.title} - ${formatMoney(product)} at ${product.merchantName}`).join("\n");
   }
   if (name === "propose_purchase") {
-    const cardLine = result.existingCard ? "\nCard on file: yes. Ask the user whether to reuse it or enter a new card." : "";
+    const cards = result.existingCards ?? [];
+    const cardLine = cards.length === 0
+      ? ""
+      : `\nCards on file: ${cards.map((c) => `${c.label} (cardId=${c.cardId})`).join(", ")}.`;
     return `${result.approvalText}${cardLine}\n\n${result.nextStep}`;
   }
   if (name === "purchase_approved_product") {
@@ -585,10 +627,19 @@ function formatToolText(name, result) {
     }
     return `Payment cryptogram created for ${result.product.title}. intentId=${result.intentId}, cryptogramId=${result.cryptogramId}`;
   }
+  if (name === "list_buyer_cards") {
+    if (result.cards.length === 0) return `No cards on file for ${result.buyerId}.`;
+    return result.cards.map((c) => `${c.label} — cardId=${c.cardId}`).join("\n");
+  }
   if (name === "forget_card") {
-    return result.forgotten
-      ? `Removed card mapping for ${result.buyerId}.`
-      : `No card was stored for ${result.buyerId}.`;
+    if (!result.forgotten) {
+      return result.cardId
+        ? `No card ${result.cardId} stored for ${result.buyerId}.`
+        : `No cards were stored for ${result.buyerId}.`;
+    }
+    return result.cardId
+      ? `Removed card ${result.cardId} for ${result.buyerId}.`
+      : `Cleared all cards for ${result.buyerId}.`;
   }
   return JSON.stringify(result);
 }

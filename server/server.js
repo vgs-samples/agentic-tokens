@@ -127,24 +127,37 @@ app.get("/api/sessions/:id", (req, res) => {
   res.json({ status: "completed", ...session });
 });
 
-// Mock merchant card store: buyer_id → cardId. Stands in for the customer's
-// own card vault. Real integrations replace this with a call to their system.
+// Mock merchant card store: buyer_id → [{cardId, lastFour, brand?, savedAt}].
+// Stands in for the customer's own card vault. We never persist PAN/CVV —
+// only the opaque VGS cardId plus surface-display metadata.
 const merchantCards = new Map();
 
 app.get("/api/merchant/cards/:buyerId", (req, res) => {
-  const cardId = merchantCards.get(req.params.buyerId);
-  if (!cardId) return res.status(404).json({ error: "buyer not found" });
-  res.json({ buyerId: req.params.buyerId, cardId });
+  const cards = merchantCards.get(req.params.buyerId) ?? [];
+  res.json({ buyerId: req.params.buyerId, cards });
 });
 
 app.post("/api/merchant/cards/:buyerId", (req, res) => {
-  const { cardId } = req.body;
+  const { cardId, lastFour, brand } = req.body;
   if (!cardId) return res.status(400).json({ error: "cardId required" });
-  merchantCards.set(req.params.buyerId, cardId);
-  res.json({ buyerId: req.params.buyerId, cardId });
+  const existing = merchantCards.get(req.params.buyerId) ?? [];
+  // Dedup by cardId — re-saving the same card just refreshes its position.
+  const next = existing.filter((c) => c.cardId !== cardId);
+  next.unshift({ cardId, lastFour: lastFour ?? null, brand: brand ?? null, savedAt: Date.now() });
+  merchantCards.set(req.params.buyerId, next);
+  res.json({ buyerId: req.params.buyerId, cards: next });
 });
 
 app.delete("/api/merchant/cards/:buyerId", (req, res) => {
+  const { cardId } = req.query;
+  if (cardId) {
+    const existing = merchantCards.get(req.params.buyerId) ?? [];
+    const next = existing.filter((c) => c.cardId !== cardId);
+    const removed = next.length !== existing.length;
+    if (next.length) merchantCards.set(req.params.buyerId, next);
+    else merchantCards.delete(req.params.buyerId);
+    return res.json({ buyerId: req.params.buyerId, cardId, deleted: removed });
+  }
   const existed = merchantCards.delete(req.params.buyerId);
   res.json({ buyerId: req.params.buyerId, deleted: existed });
 });
