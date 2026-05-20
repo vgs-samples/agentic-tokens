@@ -38,6 +38,8 @@ export default wrap(async (req) => {
       cardId: body.cardId,
       lastFour: body.lastFour ?? null,
       brand: body.brand ?? null,
+      expMonth: body.expMonth ?? null,
+      expYear: body.expYear ?? null,
       savedAt: Date.now(),
     });
     await store.setJSON(buyerId, { cards: next });

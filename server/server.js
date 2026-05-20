@@ -138,12 +138,19 @@ app.get("/api/merchant/cards/:buyerId", (req, res) => {
 });
 
 app.post("/api/merchant/cards/:buyerId", (req, res) => {
-  const { cardId, lastFour, brand } = req.body;
+  const { cardId, lastFour, brand, expMonth, expYear } = req.body;
   if (!cardId) return res.status(400).json({ error: "cardId required" });
   const existing = merchantCards.get(req.params.buyerId) ?? [];
   // Dedup by cardId — re-saving the same card just refreshes its position.
   const next = existing.filter((c) => c.cardId !== cardId);
-  next.unshift({ cardId, lastFour: lastFour ?? null, brand: brand ?? null, savedAt: Date.now() });
+  next.unshift({
+    cardId,
+    lastFour: lastFour ?? null,
+    brand: brand ?? null,
+    expMonth: expMonth ?? null,
+    expYear: expYear ?? null,
+    savedAt: Date.now(),
+  });
   merchantCards.set(req.params.buyerId, next);
   res.json({ buyerId: req.params.buyerId, cards: next });
 });

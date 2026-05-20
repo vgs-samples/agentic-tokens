@@ -117,13 +117,15 @@ export function CollectPage() {
       if (!id) throw new Error("Card creation returned no id");
       setCardId(id);
 
-      const { lastFour, brand } = extractCardSurface(result);
+      const surface = extractCardSurface(result);
+
+      const payload = { cardId: id, buyerId, ...surface };
 
       // Tell the MCP server (via session bridge) that the card is ready.
       await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cardId: id, buyerId, lastFour, brand }),
+        body: JSON.stringify(payload),
       });
 
       // Also store directly in the mock merchant catalog so MCP can look it up.
@@ -131,7 +133,7 @@ export function CollectPage() {
         await fetch(`/api/merchant/cards/${encodeURIComponent(buyerId)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cardId: id, lastFour, brand }),
+          body: JSON.stringify({ cardId: id, ...surface }),
         });
       }
       setStatus("done");
@@ -143,7 +145,12 @@ export function CollectPage() {
 
   // VGS CMP doesn't standardize the response attribute names across versions,
   // so try a few common ones and fall back to scraping the masked PAN.
-  function extractCardSurface(result: VgsCollectCardResult): { lastFour: string | null; brand: string | null } {
+  function extractCardSurface(result: VgsCollectCardResult): {
+    lastFour: string | null;
+    brand: string | null;
+    expMonth: string | null;
+    expYear: string | null;
+  } {
     const attrs = (result?.data?.data?.attributes ?? {}) as Record<string, unknown>;
     const lastFour =
       (typeof attrs.last4 === "string" && attrs.last4) ||
@@ -158,7 +165,13 @@ export function CollectPage() {
       (typeof attrs.cardBrand === "string" && attrs.cardBrand) ||
       (typeof attrs.card_type === "string" && attrs.card_type) ||
       null;
-    return { lastFour: lastFour || null, brand: brand || null };
+    const expMonthRaw =
+      attrs.exp_month ?? attrs.expMonth ?? attrs.expiration_month ?? attrs.expirationMonth ?? null;
+    const expYearRaw =
+      attrs.exp_year ?? attrs.expYear ?? attrs.expiration_year ?? attrs.expirationYear ?? null;
+    const expMonth = expMonthRaw != null ? String(expMonthRaw).padStart(2, "0").slice(-2) : null;
+    const expYear = expYearRaw != null ? String(expYearRaw).slice(-2) : null;
+    return { lastFour: lastFour || null, brand: brand || null, expMonth, expYear };
   }
 
   const fieldsReady = readyForOption === option;
