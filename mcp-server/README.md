@@ -16,17 +16,19 @@ Local stdio MCP server that lets an AI agent shop against a mock sneaker catalog
 ## Flow
 
 1. `search_products` searches the mock catalog.
-2. `propose_purchase` returns an approval handle, exact approval text, and an `existingCard` flag so the agent can ask the user whether to reuse a stored card.
+2. `propose_purchase` returns an approval handle, the exact approval text, and `existingCards: [{cardId, lastFour, brand, label}]` so the agent can offer the user a choice of saved cards (or to add a new one).
 3. After the user approves, `purchase_approved_product`:
-   - reuses the buyer's stored card (or, with `useExistingCard: false`, forces fresh collection),
-   - opens `/collect.html` if a card must be added,
-   - enrolls the card as an agentic token,
+   - uses the explicit `cardId` if the agent passes one (recommended when multiple cards are on file),
+   - or, by default, reuses the most-recently-saved card,
+   - or, with `useExistingCard: false`, opens `/collect.html` to capture a fresh card,
+   - enrolls the chosen card as an agentic token,
    - opens `/binding.html` for Visa device binding / OTP / FIDO,
    - creates an intent,
    - requests a payment cryptogram.
-4. `forget_card` removes the cached card mapping for a buyer so the next purchase prompts for fresh details.
+4. `list_buyer_cards` returns the stored cards for a buyer (cardId + last-4 + brand). Use it any time outside the purchase flow.
+5. `forget_card` removes one card (`cardId`) or all cards for a buyer.
 
-The MCP server never receives raw PAN/CVV and never handles the Visa iframe directly. Those browser-only steps stay in the existing React app.
+The MCP server never receives raw PAN/CVV and never handles the Visa iframe directly. The merchant store only persists the opaque VGS `cardId` plus surface-display metadata (last-4, brand).
 
 ## Install in an MCP client
 
@@ -51,7 +53,7 @@ Or, to scope it to the project, create `.mcp.json` in the repo root:
 }
 ```
 
-Verify with `/mcp` inside a Claude Code session — `agentic-tokens` should be listed with 4 tools.
+Verify with `/mcp` inside a Claude Code session — `agentic-tokens` should be listed with 5 tools.
 
 ### Claude Desktop
 
@@ -68,7 +70,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Quit Claude Desktop completely (Cmd+Q) and reopen it. The tools icon in the chat composer should show "agentic-tokens — 4 tools".
+Quit Claude Desktop completely (Cmd+Q) and reopen it. The tools icon in the chat composer should show "agentic-tokens — 5 tools".
 
 ### OpenAI Codex CLI
 
@@ -81,6 +83,8 @@ args = ["<REPO>/mcp-server/src/index.js"]
 ```
 
 ## Example session
+
+First purchase (no cards on file):
 
 ```text
 You: find me Nike sneakers under $150 and prepare the purchase for my approval.
@@ -96,7 +100,42 @@ You:   [completes auth]
 Agent: Cryptogram issued. intentId=..., cryptogramId=...
 ```
 
-On subsequent purchases the agent asks "use the card on file, or enter a new one?". To clear the cached card explicitly, say "forget my card" — the agent calls `forget_card`.
+Later, with two saved cards:
+
+```text
+You: buy adidas Samba for me.
+Agent: [propose_purchase returns existingCards: [••••1569, ••••1478]]
+       Found adidas Samba OG for $100 at Mock Sneaker Shop. Approve?
+       You have two cards on file: visa ••••1569 and visa ••••1478. Which one?
+You:   the 1569 one.
+Agent: [purchase_approved_product with cardId of the 1569 card → /binding → cryptogram]
+```
+
+To clear a stored card, say "forget the 1478 card" — the agent calls `forget_card` with the matching `cardId`.
+
+## Pointing at a deployed backend
+
+The MCP server is backend-agnostic — it only needs `AGENTIC_APP_BASE_URL` to point at any host that serves the same `/api/*` routes. The deployed Netlify build supports the full flow (including the MCP session bridge and the mock merchant store), backed by Netlify Blobs.
+
+Run two MCP profiles side-by-side:
+
+```json
+{
+  "mcpServers": {
+    "agentic-tokens-local": {
+      "command": "node",
+      "args": ["<REPO>/mcp-server/src/index.js"]
+    },
+    "agentic-tokens-prod": {
+      "command": "node",
+      "args": ["<REPO>/mcp-server/src/index.js"],
+      "env": { "AGENTIC_APP_BASE_URL": "https://your-deploy.netlify.app" }
+    }
+  }
+}
+```
+
+Both expose the same 5 tools; the agent (or you) picks which to use.
 
 ## Configuration
 

@@ -29,15 +29,15 @@ const purchases = new Map();
 const tools = [
   {
     name: "search_products",
-    title: "Search mock products",
-    description: "Search the mock sneaker catalog by query, brand, and max price.",
+    title: "Search products",
+    description: "Search the merchant catalog for items the user wants to buy. Filter by free-text query, brand, or max price. Call this any time the user mentions a purchase intent ('buy', 'find', 'show me').",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Natural-language search query, e.g. 'Nike sneakers under $150'." },
-        brand: { type: "string", description: "Optional brand filter, e.g. Nike." },
-        maxPrice: { type: "number", description: "Optional maximum item price in USD." },
-        limit: { type: "number", description: "Maximum number of products to return." },
+        query: { type: "string", description: "Free-text search, e.g. 'Nike sneakers under $150'. Natural language is fine — brand and price are extracted." },
+        brand: { type: "string", description: "Optional explicit brand filter (Nike, adidas, New Balance)." },
+        maxPrice: { type: "number", description: "Optional max price in USD." },
+        limit: { type: "number", description: "Max products to return (default 5)." },
       },
       additionalProperties: false,
     },
@@ -45,15 +45,15 @@ const tools = [
   },
   {
     name: "propose_purchase",
-    title: "Prepare purchase approval",
-    description: "Choose a product from the mock catalog and return a purchase handle plus exact user approval text.",
+    title: "Propose purchase for approval",
+    description: "Pick one matching product and prepare it for the user's explicit approval. Returns the exact product/price and any saved cards. Always wait for the user to confirm both the item and which card to use before calling purchase_approved_product.",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Natural-language purchase request." },
-        productId: { type: "string", description: "Optional exact product id returned by search_products." },
+        query: { type: "string", description: "What the user wants to buy, in their own words." },
+        productId: { type: "string", description: "Optional exact product id from search_products to skip search." },
         brand: { type: "string", description: "Optional brand filter." },
-        maxPrice: { type: "number", description: "Optional maximum price in USD." },
+        maxPrice: { type: "number", description: "Optional max price in USD." },
         buyerId: { type: "string", description: "Merchant-side buyer id. Defaults to demo-buyer." },
       },
       additionalProperties: false,
@@ -62,16 +62,17 @@ const tools = [
   },
   {
     name: "purchase_approved_product",
-    title: "Purchase approved product",
-    description: "After explicit user approval, collect a card if needed, run Visa authentication, create an intent, and return a payment cryptogram.",
+    title: "Complete approved purchase",
+    description: "Complete the agentic payment flow after the user has approved both the product/price AND which card to use. Handles card selection or fresh collection, Visa device authentication, intent creation, and returns a payment cryptogram the merchant can charge.",
     inputSchema: {
       type: "object",
       properties: {
         purchaseId: { type: "string", description: "Handle returned by propose_purchase." },
-        approved: { type: "boolean", description: "Must be true only after the user explicitly approved the exact proposed product and price." },
-        useExistingCard: { type: "boolean", description: "When the buyer already has a card on file, set true to reuse it or false to force fresh card collection. Defaults to true." },
+        approved: { type: "boolean", description: "Must be true. Only set after the user explicitly approved the exact product, price, AND card choice." },
+        cardId: { type: "string", description: "Explicit cardId to charge — recommended when multiple cards are on file. Pick one from propose_purchase.existingCards or list_buyer_cards. Omit to default to the most recent saved card." },
+        useExistingCard: { type: "boolean", description: "Set false to force a fresh card collection even when cards exist on file. Defaults to true." },
         consumerEmail: { type: "string", description: "Consumer email used for token enrollment and OTP." },
-        waitForBrowser: { type: "boolean", description: "Wait for browser collection/authentication flows. Defaults to true." },
+        waitForBrowser: { type: "boolean", description: "If true (default), block until the browser steps finish. If false, return waiting state immediately and resume by calling again with the same purchaseId." },
       },
       required: ["purchaseId", "approved"],
       additionalProperties: false,
@@ -79,13 +80,27 @@ const tools = [
     annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
   {
-    name: "forget_card",
-    title: "Forget stored card",
-    description: "Remove the cached card mapping for a buyer so the next purchase will prompt for fresh card details.",
+    name: "list_buyer_cards",
+    title: "List saved cards",
+    description: "Return the cards a buyer has on file (last-4 + brand + opaque cardId). Use this when the user asks 'what cards do I have' outside of an active purchase.",
     inputSchema: {
       type: "object",
       properties: {
         buyerId: { type: "string", description: "Merchant-side buyer id. Defaults to demo-buyer." },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "forget_card",
+    title: "Forget saved card",
+    description: "Remove a saved card from the buyer's file. Pass a specific cardId to forget one card, or omit cardId to clear every card for that buyer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        buyerId: { type: "string", description: "Merchant-side buyer id. Defaults to demo-buyer." },
+        cardId: { type: "string", description: "Optional: forget only this card. Omit to clear all cards." },
       },
       additionalProperties: false,
     },
@@ -97,6 +112,7 @@ const handlers = {
   search_products: handleSearchProducts,
   propose_purchase: handleProposePurchase,
   purchase_approved_product: handlePurchaseApprovedProduct,
+  list_buyer_cards: handleListBuyerCards,
   forget_card: handleForgetCard,
 };
 
@@ -169,7 +185,7 @@ async function callTool(params = {}) {
     };
   } catch (err) {
     return {
-      content: [{ type: "text", text: err.message }],
+      content: [{ type: "text", text: `❌ **${name}** failed\n\n${err.message}` }],
       structuredContent: { error: err.message },
       isError: true,
     };
@@ -194,7 +210,7 @@ async function handleProposePurchase(args) {
 
   const purchaseId = createId("purchase");
   const buyerId = args.buyerId || defaultBuyerId;
-  const existingCardId = await getCardForBuyer(buyerId);
+  const cardsOnFile = await getCardsForBuyer(buyerId);
   const purchase = {
     id: purchaseId,
     buyerId,
@@ -205,18 +221,24 @@ async function handleProposePurchase(args) {
   purchases.set(purchaseId, purchase);
 
   const approvalText = `Approve purchase ${purchaseId}: ${product.title} (${product.color}) for ${formatMoney(product)} at ${product.merchantName}.`;
-  const nextStep = existingCardId
-    ? "Ask the user to approve the exact product and price, AND ask whether to use the card already on file or enter a new one. Then call purchase_approved_product with approved=true and useExistingCard=true|false."
-    : "Ask the user to approve the exact product and price, then call purchase_approved_product with approved=true. They will be prompted to enter card details in a browser tab.";
+  const existingCards = cardsOnFile.map((c) => ({ ...c, label: formatCardLabel(c) }));
+  const nextStep = buildProposeNextStep(existingCards);
   return {
     purchaseId,
     approvalRequired: true,
     approvalText,
     buyerId,
     product,
-    existingCard: existingCardId ? { onFile: true } : null,
+    existingCards,
     nextStep,
   };
+}
+
+function buildProposeNextStep(cards) {
+  if (cards.length === 0) {
+    return "Confirm the product and price with the user. After they say yes, call purchase_approved_product with approved=true — a browser tab will open for them to enter card details.";
+  }
+  return "ALWAYS present the payment-method table verbatim to the user and ask them to pick a numbered card OR 'new'. Do NOT assume a default even when only one card is on file. After the user picks: call purchase_approved_product with approved=true and either cardId=<their chosen card's id> or useExistingCard=false if they chose 'new'.";
 }
 
 async function handlePurchaseApprovedProduct(args) {
@@ -241,7 +263,12 @@ async function handlePurchaseApprovedProduct(args) {
   // Sticky flag — once the agent asks for a new card, force collection even on resume.
   if (args.useExistingCard === false) purchase.forceNewCard = true;
 
-  let cardId = purchase.cardId ?? (purchase.forceNewCard ? null : await getCardForBuyer(buyerId));
+  // Resolve cardId: prior pick > explicit pick from agent > forced fresh > most-recent saved.
+  let cardId = purchase.cardId ?? args.cardId ?? null;
+  if (!cardId && !purchase.forceNewCard) {
+    const cards = await getCardsForBuyer(buyerId);
+    if (cards.length > 0) cardId = cards[0].cardId;
+  }
   let collect = purchase.collect ?? null;
   if (!cardId && previousStatus === "waiting_for_card" && collect) {
     const cardSession = waitForBrowser
@@ -389,25 +416,49 @@ async function handlePurchaseApprovedProduct(args) {
   return result;
 }
 
-async function getCardForBuyer(buyerId) {
+async function getCardsForBuyer(buyerId) {
   try {
     const response = await apiFetch(`/merchant/cards/${encodeURIComponent(buyerId)}`, { allow404: true });
-    return response?.cardId ?? null;
+    return Array.isArray(response?.cards) ? response.cards : [];
   } catch (err) {
-    // Server unreachable during approval flow — treat as no card on file.
-    log(`getCardForBuyer fallback: ${err.message}`);
-    return null;
+    // Server unreachable during approval flow — treat as no cards on file.
+    log(`getCardsForBuyer fallback: ${err.message}`);
+    return [];
   }
+}
+
+function formatCardLabel(card) {
+  const brand = `[${normalizeBrand(card.brand)}]`;
+  const number = card.lastFour ? `****${card.lastFour}` : `…${card.cardId.slice(-4)}`;
+  const exp = card.expMonth && card.expYear
+    ? ` ${String(card.expMonth).padStart(2, "0")}/${String(card.expYear).slice(-2)}`
+    : "";
+  return `${brand} ${number}${exp}`;
+}
+
+function normalizeBrand(brand) {
+  if (!brand) return "CARD";
+  return String(brand).toUpperCase().replace(/[\s_]+/g, "-");
+}
+
+async function handleListBuyerCards(args) {
+  const buyerId = args.buyerId || defaultBuyerId;
+  const cards = await getCardsForBuyer(buyerId);
+  return {
+    buyerId,
+    cards: cards.map((c) => ({ ...c, label: formatCardLabel(c) })),
+  };
 }
 
 async function handleForgetCard(args) {
   const buyerId = args.buyerId || defaultBuyerId;
-  const response = await apiFetch(`/merchant/cards/${encodeURIComponent(buyerId)}`, {
-    method: "DELETE",
-    allow404: true,
-  });
+  const path = args.cardId
+    ? `/merchant/cards/${encodeURIComponent(buyerId)}?cardId=${encodeURIComponent(args.cardId)}`
+    : `/merchant/cards/${encodeURIComponent(buyerId)}`;
+  const response = await apiFetch(path, { method: "DELETE", allow404: true });
   return {
     buyerId,
+    cardId: args.cardId ?? null,
     forgotten: Boolean(response?.deleted),
   };
 }
@@ -571,26 +622,97 @@ function buildAppUrl(path, params) {
 }
 
 function formatToolText(name, result) {
-  if (name === "search_products") {
-    if (result.products.length === 0) return "No matching products found.";
-    return result.products.map((product) => `${product.id}: ${product.title} - ${formatMoney(product)} at ${product.merchantName}`).join("\n");
-  }
-  if (name === "propose_purchase") {
-    const cardLine = result.existingCard ? "\nCard on file: yes. Ask the user whether to reuse it or enter a new card." : "";
-    return `${result.approvalText}${cardLine}\n\n${result.nextStep}`;
-  }
-  if (name === "purchase_approved_product") {
-    if (result.status !== "completed") {
-      return `${result.status}: ${result.message ?? "Browser action required."}`;
-    }
-    return `Payment cryptogram created for ${result.product.title}. intentId=${result.intentId}, cryptogramId=${result.cryptogramId}`;
-  }
-  if (name === "forget_card") {
-    return result.forgotten
-      ? `Removed card mapping for ${result.buyerId}.`
-      : `No card was stored for ${result.buyerId}.`;
-  }
+  if (name === "search_products") return formatSearchProducts(result);
+  if (name === "propose_purchase") return formatProposePurchase(result);
+  if (name === "purchase_approved_product") return formatPurchaseResult(result);
+  if (name === "list_buyer_cards") return formatBuyerCards(result);
+  if (name === "forget_card") return formatForgetCard(result);
   return JSON.stringify(result);
+}
+
+function formatSearchProducts(result) {
+  if (result.products.length === 0) return "🔍 No matching products in stock.";
+  const header = "| # | Product | Price | ID |\n|---|---|---:|---|";
+  const rows = result.products.map((p, i) =>
+    `| ${i + 1} | **${p.title}** _(${p.color})_ | $${formatAmount(p.price)} ${p.currency} | \`${p.id}\` |`,
+  ).join("\n");
+  const plural = result.products.length === 1 ? "match" : "matches";
+  return `🔍 Found ${result.products.length} ${plural}\n\n${header}\n${rows}`;
+}
+
+function formatProposePurchase(result) {
+  const p = result.product;
+  const lines = [
+    `📦 **Approval requested** — \`${result.purchaseId}\``,
+    "",
+    "| | |",
+    "|---|---|",
+    `| Product | ${p.title} _(${p.color})_ |`,
+    `| Price | **$${formatAmount(p.price)} ${p.currency}** |`,
+    `| Merchant | ${p.merchantName} |`,
+  ];
+  const cards = result.existingCards ?? [];
+  if (cards.length === 0) {
+    lines.push("", "💳 No cards on file — a browser tab will open to add one.");
+  } else {
+    lines.push(
+      "",
+      "💳 **Payment method** — pick one:",
+      "",
+      "| # | Card | ID |",
+      "|---|---|---|",
+    );
+    cards.forEach((c, i) => {
+      lines.push(`| **${i + 1}** | ${c.label} | \`${c.cardId}\` |`);
+    });
+    lines.push(`| **new** | Add a different card | — |`);
+  }
+  lines.push("", `_${result.nextStep}_`);
+  return lines.join("\n");
+}
+
+function formatPurchaseResult(result) {
+  if (result.status !== "completed") {
+    const url = result.collect?.url || result.binding?.url;
+    const action = result.status === "waiting_for_card"
+      ? "Open the card form in your browser:"
+      : "Complete Visa authentication in your browser:";
+    const niceStatus = result.status.replace(/_/g, " ");
+    const msg = result.message ? `\n\n${result.message}` : "";
+    return `⏳ **${niceStatus}**\n\n${action}\n${url}${msg}`;
+  }
+  const p = result.product;
+  const lines = [
+    `✅ **Purchase authorized** — \`${result.purchaseId}\``,
+    "",
+    "| | |",
+    "|---|---|",
+    `| Product | ${p.title} |`,
+    `| Amount | **$${formatAmount(p.price)} ${p.currency}** |`,
+    `| Merchant | ${p.merchantName} |`,
+    `| Card | \`${result.cardId}\` |`,
+    `| Intent | \`${result.intentId}\` |`,
+    `| Cryptogram | \`${result.cryptogramId}\` |`,
+  ];
+  return lines.join("\n");
+}
+
+function formatBuyerCards(result) {
+  if (result.cards.length === 0) return `💳 No cards on file for \`${result.buyerId}\`.`;
+  const header = "| # | Card | ID |\n|---|---|---|";
+  const rows = result.cards.map((c, i) => `| **${i + 1}** | ${c.label} | \`${c.cardId}\` |`).join("\n");
+  return `💳 **Cards on file for \`${result.buyerId}\`**\n\n${header}\n${rows}`;
+}
+
+function formatForgetCard(result) {
+  if (!result.forgotten) {
+    return result.cardId
+      ? `ℹ️ No card \`${result.cardId}\` was stored for \`${result.buyerId}\`.`
+      : `ℹ️ No cards were stored for \`${result.buyerId}\`.`;
+  }
+  return result.cardId
+    ? `🗑️ Removed card \`${result.cardId}\` for \`${result.buyerId}\`.`
+    : `🗑️ Cleared all cards for \`${result.buyerId}\`.`;
 }
 
 function sendResult(id, result) {

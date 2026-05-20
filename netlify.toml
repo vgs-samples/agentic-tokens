@@ -28,6 +28,23 @@
   to     = "/.netlify/functions/agentic-tokens"
   status = 200
 
+# MCP bridge — the function reads the session id out of the path.
+[[redirects]]
+  from   = "/api/sessions/*"
+  to     = "/.netlify/functions/sessions"
+  status = 200
+
+# Mock merchant card store — list endpoint and per-buyer routes share one function.
+[[redirects]]
+  from   = "/api/merchant/cards"
+  to     = "/.netlify/functions/merchant"
+  status = 200
+
+[[redirects]]
+  from   = "/api/merchant/cards/*"
+  to     = "/.netlify/functions/merchant"
+  status = 200
+
 # Everything else under /api/* maps directly:
 #   /api/token        → /.netlify/functions/token
 #   /api/config       → /.netlify/functions/config

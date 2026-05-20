@@ -117,11 +117,15 @@ export function CollectPage() {
       if (!id) throw new Error("Card creation returned no id");
       setCardId(id);
 
+      const surface = extractCardSurface(result);
+
+      const payload = { cardId: id, buyerId, ...surface };
+
       // Tell the MCP server (via session bridge) that the card is ready.
       await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cardId: id, buyerId }),
+        body: JSON.stringify(payload),
       });
 
       // Also store directly in the mock merchant catalog so MCP can look it up.
@@ -129,7 +133,7 @@ export function CollectPage() {
         await fetch(`/api/merchant/cards/${encodeURIComponent(buyerId)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cardId: id }),
+          body: JSON.stringify({ cardId: id, ...surface }),
         });
       }
       setStatus("done");
@@ -137,6 +141,37 @@ export function CollectPage() {
       setError((err as Error).message);
       setStatus("error");
     }
+  }
+
+  // VGS CMP doesn't standardize the response attribute names across versions,
+  // so try a few common ones and fall back to scraping the masked PAN.
+  function extractCardSurface(result: VgsCollectCardResult): {
+    lastFour: string | null;
+    brand: string | null;
+    expMonth: string | null;
+    expYear: string | null;
+  } {
+    const attrs = (result?.data?.data?.attributes ?? {}) as Record<string, unknown>;
+    const lastFour =
+      (typeof attrs.last4 === "string" && attrs.last4) ||
+      (typeof attrs.last_4 === "string" && attrs.last_4) ||
+      (typeof attrs.last_four === "string" && attrs.last_four) ||
+      (typeof attrs.maskedNumber === "string" && attrs.maskedNumber.slice(-4)) ||
+      (typeof attrs.number === "string" && attrs.number.slice(-4)) ||
+      null;
+    const brand =
+      (typeof attrs.brand === "string" && attrs.brand) ||
+      (typeof attrs.card_brand === "string" && attrs.card_brand) ||
+      (typeof attrs.cardBrand === "string" && attrs.cardBrand) ||
+      (typeof attrs.card_type === "string" && attrs.card_type) ||
+      null;
+    const expMonthRaw =
+      attrs.exp_month ?? attrs.expMonth ?? attrs.expiration_month ?? attrs.expirationMonth ?? null;
+    const expYearRaw =
+      attrs.exp_year ?? attrs.expYear ?? attrs.expiration_year ?? attrs.expirationYear ?? null;
+    const expMonth = expMonthRaw != null ? String(expMonthRaw).padStart(2, "0").slice(-2) : null;
+    const expYear = expYearRaw != null ? String(expYearRaw).slice(-2) : null;
+    return { lastFour: lastFour || null, brand: brand || null, expMonth, expYear };
   }
 
   const fieldsReady = readyForOption === option;
