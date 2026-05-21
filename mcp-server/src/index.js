@@ -28,6 +28,10 @@ const server = createMcpServer({
   waitForBrowser: true,
   waitMs: parseInt(process.env.AGENTIC_BROWSER_WAIT_MS, 10) || undefined,
   pollMs: parseInt(process.env.AGENTIC_POLL_MS, 10) || undefined,
+  // Stdio mode defaults to local preview — render writes HTML to /tmp and opens
+  // it in the user's default browser. Set AGENTIC_LOCAL_PREVIEW=false to fall
+  // back to the HTTP-style behavior (store on the backend, return previewUrl).
+  localPreview: process.env.AGENTIC_LOCAL_PREVIEW !== "false",
 });
 
 await server.connect(new StdioServerTransport());
