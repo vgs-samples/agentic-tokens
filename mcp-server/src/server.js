@@ -14,7 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { renderMarketingSite, THEME_COLORS } from "./agency.js";
 
-const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.5.1" };
+const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.5.2" };
 
 // Zod schema for the JSON `params` the LLM produces. Matches the shape consumed by
 // renderMarketingSite() in agency.js. Almost everything is optional — defaults in
@@ -116,9 +116,11 @@ When the user asks you to make / build / generate a marketing site, follow this 
 
 1. **Generate a JSON params object** that fits the user's brief. The schema is enforced by render_marketing_site / publish_site. Required top-level keys: brand, themeColor, hero, stats (x4), about, why (6 features), prices (3 tiers), reviews (3 items), imageSeeds. Tailor every text field to the user's theme — company name, tagline, USPs, feature titles, price tiers, fake testimonial text + cities, etc. Pick a themeColor that matches the brand (e.g. emerald for eco, rose for food, sky for tech, amber for warmth). Pick descriptive picsum imageSeeds (e.g. "berry-farm-2024", "mountain-coffee-roastery").
 
-2. Call **render_marketing_site** with that params object. It returns \`structuredContent.html\` — the FULL rendered HTML of the page.
+2. Call **render_marketing_site** with that params object. It returns \`siteId\`, \`previewUrl\`, and \`artifactHtml\` — the last one is a single-line <iframe> wrapper pointing at previewUrl.
 
-3. **Create an Artifact with type "text/html"** whose content IS that html string, verbatim. Do not wrap it in an iframe; do not transform it; do not write your own HTML around it. Paste the exact \`html\` value from the tool result as the artifact body. Claude Desktop will render the full page locally in its artifact panel — no external URL is involved.
+3. **Use the artifacts capability** to create an artifact with type="text/html" whose body is the \`artifactHtml\` string from the tool result, verbatim (5 lines of HTML — keep it as-is). Claude Desktop will render the artifact in its side panel, which loads the full landing page via the embedded iframe.
+
+   DO NOT paste raw HTML into the chat as a code block. DO NOT skip the artifact step — the previewUrl alone is a fallback, not the primary preview. Below the artifact, mention the previewUrl as a clickable fallback link, so the user can open the page in a separate browser tab if they want.
 
 4. **Ask the user explicitly**: "Shall I publish this for $5/month?"
    Wait for their reply. Do not call publish_site without explicit user confirmation.
@@ -185,7 +187,9 @@ export function createMcpServer(options) {
     "render_marketing_site",
     {
       title: "Render a marketing site preview",
-      description: `Render a marketing landing page from a JSON \`params\` object and return the FULL HTML string inline. Nothing is stored server-side — the HTML lives only in the tool result. The agent should embed that HTML directly inside a Claude Desktop Artifact (type=text/html) so the user previews the page locally.
+      description: `Render a marketing landing page from a JSON \`params\` object. Stores the rendered HTML server-side as a preview (10-minute TTL) and returns \`{ siteId, previewUrl, artifactHtml }\`.
+
+The agent should then create a Claude Desktop artifact (type="text/html") whose body is the tiny \`artifactHtml\` iframe wrapper — Claude Desktop's artifact panel renders the iframe, which loads the full page from \`previewUrl\`.
 
 Use this BEFORE publish_site. The same params produce identical HTML, so previewing and publishing are deterministically the same page.
 
@@ -293,16 +297,33 @@ async function handleRenderMarketingSite(args, ctx) {
 
   const html = renderMarketingSite(params);
   const companyName = params.brand?.name ?? null;
+  const siteId = createId("site").replace("site_", "s").slice(0, 8);
 
-  // No server-side storage: the rendered HTML is returned inline so the agent
-  // can embed it directly in a Claude Desktop Artifact (type=text/html).
-  // Nothing about the preview round-trips through the server — Claude Desktop
-  // renders the HTML locally inside its artifact pane.
+  // Store rendered HTML so /preview/<siteId> can serve it. Status="preview" means
+  // /s/<siteId> still 404s — it only flips to "published" via publish_site.
+  await apiFetch(ctx, `/sites`, {
+    method: "POST",
+    body: { siteId, html, buyerId: ctx.defaultBuyerId, companyName, status: "preview" },
+  });
+
+  const previewUrl = `${ctx.appBaseUrl}/preview/${siteId}`;
+  // Small, self-contained artifact body — just an iframe pointing at /preview.
+  // It's intentionally tiny: the LLM is reliably willing to write 5 lines of HTML
+  // into an artifact (so Claude Desktop renders the artifact panel). Writing
+  // a 5KB HTML document into an artifact, by contrast, often makes the model
+  // fall back to dumping the HTML in chat as text.
+  const artifactHtml = `<!doctype html><html><body style="margin:0;padding:0;height:100vh"><iframe src="${previewUrl}" style="width:100%;height:100%;border:0" loading="eager"></iframe></body></html>`;
+
   return {
     status: "preview",
+    siteId,
+    previewUrl,
     companyName,
-    html,
-    nextStep: `Site rendered. Create an Artifact with type="text/html" whose content is the entire \`html\` string from this response (do NOT add an iframe, do NOT modify the HTML — paste it verbatim as the artifact body). Claude Desktop will render it in the artifact panel. After the user reviews it, ask "Shall I publish this for $5/month?" and wait for explicit confirmation before calling publish_site with the SAME params.`,
+    artifactHtml,
+    nextStep: `Site rendered. Now in YOUR response do TWO things, exactly:
+1) Write an artifact (Claude Desktop will render it in the side panel). The artifact body MUST be the artifactHtml string above (a 1-line iframe wrapper). Use the artifacts capability — do NOT just paste HTML in chat as a code block.
+2) Below the artifact, write a short message to the user that includes the previewUrl as a fallback link, e.g. "Превью: ${previewUrl}". Then ask: "Опубликовать за $5/месяц?"
+After the user confirms, call publish_site with the SAME params.`,
   };
 }
 
@@ -699,16 +720,12 @@ function formatToolText(name, result) {
 }
 
 function formatRenderSite(result) {
-  // The full HTML is in result.html (structuredContent), but we keep this text
-  // block short so it doesn't bloat the chat. The agent reads structuredContent.html
-  // directly when creating the artifact.
-  const size = result.html ? `${Math.round(result.html.length / 1024)} KB` : "—";
   return [
     `🎨 **Preview ready** for ${result.companyName ?? "your site"}`,
     "",
-    `Rendered HTML is in structuredContent.html (${size}). Create an Artifact (type: \`text/html\`) using that exact string as the artifact body — Claude Desktop will render it in the artifact panel.`,
+    `Preview URL: ${result.previewUrl}`,
     "",
-    `_After the user reviews the preview, ask "Shall I publish this for $5/month?" and call publish_site with the SAME params._`,
+    `_Now create an artifact (type: \`text/html\`) using the \`artifactHtml\` string from this response — it's a 1-line <iframe> wrapper, the LLM should write it itself. Claude Desktop will render the iframe in its artifact panel. Also share the previewUrl above as a clickable fallback. After the user reviews the page, ask "Shall I publish this for $5/month?" and call publish_site with the same params._`,
   ].join("\n");
 }
 
