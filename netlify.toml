@@ -34,6 +34,12 @@
   to     = "/.netlify/functions/sessions"
   status = 200
 
+# Remote MCP endpoint: agents connect to https://<site>/mcp as a Streamable HTTP MCP server.
+[[redirects]]
+  from   = "/mcp"
+  to     = "/.netlify/functions/mcp"
+  status = 200
+
 # Mock merchant card store — list endpoint and per-buyer routes share one function.
 [[redirects]]
   from   = "/api/merchant/cards"
