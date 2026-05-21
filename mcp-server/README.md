@@ -1,6 +1,9 @@
 # Agentic Tokens MCP Server
 
-Local stdio MCP server that lets an AI agent shop against a mock sneaker catalog and create a VGS Agentic Tokens payment cryptogram through the existing demo app.
+MCP server that lets an AI agent shop against a mock sneaker catalog and create a VGS Agentic Tokens payment cryptogram through the demo app. Built on `@modelcontextprotocol/sdk`. Ships in two flavors:
+
+- **stdio** — `node mcp-server/src/index.js`, runs locally, auto-opens browser tabs for card collection and Visa binding. Best for desktop MCP clients (Claude Desktop, Claude Code, Codex).
+- **HTTP** — `https://<your-site>/mcp` via `netlify/functions/mcp.js`, stateless, deployed alongside the demo app. The agent surfaces collect/binding URLs back to the user instead of opening them. Best for web/remote MCP clients.
 
 ## Prerequisites
 
@@ -32,9 +35,48 @@ The MCP server never receives raw PAN/CVV and never handles the Visa iframe dire
 
 ## Install in an MCP client
 
+Pick **HTTP** (deployed, no local install) or **stdio** (local Node process). Both expose the same 5 tools and differ only in transport.
+
+### HTTP — deployed MCP
+
+Once the repo is deployed to Netlify, the MCP endpoint lives at `https://<your-site>/mcp`. Any client that supports remote/Streamable HTTP MCP can connect to it without running anything locally.
+
+**Claude Desktop / Claude Code:**
+
+```json
+{
+  "mcpServers": {
+    "agentic-tokens": {
+      "type": "http",
+      "url": "https://vgs-agentic-tokens.netlify.app/mcp"
+    }
+  }
+}
+```
+
+(Replace the URL with your own deployed site.)
+
+**Quick check** — the endpoint speaks JSON-RPC over POST:
+
+```bash
+curl -X POST https://vgs-agentic-tokens.netlify.app/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
+```
+
+You should get back a JSON-RPC result with `serverInfo.name = "agentic-tokens-mcp"`.
+
+**HTTP-mode behavior differences:**
+- `purchase_approved_product` is **always non-blocking** — when a browser step is needed (Collect or Visa binding), the tool returns `status: waiting_for_card` / `waiting_for_authentication` with the URL inside `content[]`. The agent surfaces the URL to the user, the user opens it in their own browser, completes the step, and the agent calls `purchase_approved_product` again with the same `purchaseId` to advance.
+- Purchase state is stored in **Netlify Blobs** (store name `agentic-purchases`, 30-minute TTL), so different function invocations see the same state.
+- No `AGENTIC_BUYER_ID` env var — pass `buyerId` as a tool argument instead.
+
+### stdio — local install
+
 The MCP server runs from this repo. Replace `<REPO>` below with the absolute path to your checkout (e.g. `/Users/you/code/agentic-tokens`).
 
-### Claude Code CLI
+#### Claude Code CLI
 
 ```bash
 claude mcp add agentic-tokens node <REPO>/mcp-server/src/index.js
@@ -55,7 +97,7 @@ Or, to scope it to the project, create `.mcp.json` in the repo root:
 
 Verify with `/mcp` inside a Claude Code session — `agentic-tokens` should be listed with 5 tools.
 
-### Claude Desktop
+#### Claude Desktop
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -72,7 +114,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 Quit Claude Desktop completely (Cmd+Q) and reopen it. The tools icon in the chat composer should show "agentic-tokens — 5 tools".
 
-### OpenAI Codex CLI
+#### OpenAI Codex CLI
 
 Edit `~/.codex/config.toml`:
 

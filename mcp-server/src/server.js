@@ -1,0 +1,597 @@
+// Shared MCP server factory. Two entry points wrap it:
+//   - mcp-server/src/index.js     stdio transport (local install)
+//   - netlify/functions/mcp.js    Web Standard HTTP transport (deployed)
+//
+// The factory takes everything that differs between transports as injected
+// config: where the backend lives, how to persist purchase state across calls,
+// whether the host can open a browser, and the default blocking behavior.
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { findProduct, searchCatalog } from "./catalog.js";
+
+const SERVER_INFO = { name: "agentic-tokens-mcp", version: "0.2.0" };
+const DEFAULT_WAIT_MS = 5 * 60 * 1000;
+const DEFAULT_POLL_MS = 1500;
+
+export function createMcpServer(options) {
+  const {
+    apiBaseUrl,
+    purchaseStore,
+    openBrowser = () => false,
+    fetchImpl = fetch,
+    buyerId: defaultBuyerId = "demo-buyer",
+    consumerEmail: defaultConsumerEmail = "user@example.com",
+    environment: defaultEnvironment = "sandbox",
+    waitForBrowser: defaultWaitForBrowser = true,
+    waitMs = DEFAULT_WAIT_MS,
+    pollMs = DEFAULT_POLL_MS,
+    appBaseUrl,
+  } = options;
+
+  if (!apiBaseUrl) throw new Error("createMcpServer: apiBaseUrl is required");
+  if (!purchaseStore) throw new Error("createMcpServer: purchaseStore is required");
+  const browserAppBaseUrl = appBaseUrl ?? deriveAppBaseUrl(apiBaseUrl);
+
+  const ctx = {
+    apiBaseUrl,
+    appBaseUrl: browserAppBaseUrl,
+    purchaseStore,
+    openBrowser,
+    fetchImpl,
+    defaultBuyerId,
+    defaultConsumerEmail,
+    defaultEnvironment,
+    defaultWaitForBrowser,
+    waitMs,
+    pollMs,
+  };
+
+  const server = new McpServer(SERVER_INFO);
+
+  server.registerTool(
+    "search_products",
+    {
+      title: "Search products",
+      description: "Search the merchant catalog for items the user wants to buy. Filter by free-text query, brand, or max price. Call this any time the user mentions a purchase intent ('buy', 'find', 'show me').",
+      inputSchema: {
+        query: z.string().optional().describe("Free-text search, e.g. 'Nike sneakers under $150'. Natural language is fine — brand and price are extracted."),
+        brand: z.string().optional().describe("Optional explicit brand filter (Nike, adidas, New Balance)."),
+        maxPrice: z.number().optional().describe("Optional max price in USD."),
+        limit: z.number().optional().describe("Max products to return (default 5)."),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    (args) => wrapToolResult("search_products", () => handleSearchProducts(args, ctx)),
+  );
+
+  server.registerTool(
+    "propose_purchase",
+    {
+      title: "Propose purchase for approval",
+      description: "Pick one matching product and prepare it for the user's explicit approval. Returns the exact product/price and any saved cards. Always wait for the user to confirm both the item and which card to use before calling purchase_approved_product.",
+      inputSchema: {
+        query: z.string().optional().describe("What the user wants to buy, in their own words."),
+        productId: z.string().optional().describe("Optional exact product id from search_products to skip search."),
+        brand: z.string().optional().describe("Optional brand filter."),
+        maxPrice: z.number().optional().describe("Optional max price in USD."),
+        buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    (args) => wrapToolResult("propose_purchase", () => handleProposePurchase(args, ctx)),
+  );
+
+  server.registerTool(
+    "purchase_approved_product",
+    {
+      title: "Complete approved purchase",
+      description: "Complete the agentic payment flow after the user has approved both the product/price AND which card to use. Handles card selection or fresh collection, Visa device authentication, intent creation, and returns a payment cryptogram the merchant can charge.",
+      inputSchema: {
+        purchaseId: z.string().describe("Handle returned by propose_purchase."),
+        approved: z.boolean().describe("Must be true. Only set after the user explicitly approved the exact product, price, AND card choice."),
+        cardId: z.string().optional().describe("Explicit cardId to charge — recommended when multiple cards are on file. Pick one from propose_purchase.existingCards or list_buyer_cards. Omit to default to the most recent saved card."),
+        useExistingCard: z.boolean().optional().describe("Set false to force a fresh card collection even when cards exist on file. Defaults to true."),
+        consumerEmail: z.string().optional().describe("Consumer email used for token enrollment and OTP."),
+        waitForBrowser: z.boolean().optional().describe("If true (default in stdio mode), block until the browser steps finish. If false (default in HTTP mode), return waiting state immediately and resume by calling again with the same purchaseId."),
+      },
+      annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    },
+    (args) => wrapToolResult("purchase_approved_product", () => handlePurchaseApprovedProduct(args, ctx)),
+  );
+
+  server.registerTool(
+    "list_buyer_cards",
+    {
+      title: "List saved cards",
+      description: "Return the cards a buyer has on file (last-4 + brand + opaque cardId). Use this when the user asks 'what cards do I have' outside of an active purchase.",
+      inputSchema: {
+        buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    (args) => wrapToolResult("list_buyer_cards", () => handleListBuyerCards(args, ctx)),
+  );
+
+  server.registerTool(
+    "forget_card",
+    {
+      title: "Forget saved card",
+      description: "Remove a saved card from the buyer's file. Pass a specific cardId to forget one card, or omit cardId to clear every card for that buyer.",
+      inputSchema: {
+        buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
+        cardId: z.string().optional().describe("Optional: forget only this card. Omit to clear all cards."),
+      },
+      annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    (args) => wrapToolResult("forget_card", () => handleForgetCard(args, ctx)),
+  );
+
+  return server;
+}
+
+// --- Tool handlers ---
+
+async function handleSearchProducts(args) {
+  const products = searchCatalog(args);
+  return { products };
+}
+
+async function handleProposePurchase(args, ctx) {
+  const product = args.productId ? findProduct(args.productId) : searchCatalog(args)[0];
+  if (!product) throw new Error("No matching in-stock product found in the mock catalog.");
+
+  const requestedMaxPrice = Number.isFinite(Number(args.maxPrice)) ? Number(args.maxPrice) : null;
+  if (requestedMaxPrice !== null && product.price > requestedMaxPrice) {
+    throw new Error(`${product.title} costs ${formatMoney(product)}, above requested max price ${requestedMaxPrice} USD.`);
+  }
+
+  const purchaseId = createId("purchase");
+  const buyerId = args.buyerId || ctx.defaultBuyerId;
+  const cardsOnFile = await getCardsForBuyer(ctx, buyerId);
+  const purchase = {
+    id: purchaseId,
+    buyerId,
+    product,
+    status: "awaiting_approval",
+    createdAt: new Date().toISOString(),
+  };
+  await ctx.purchaseStore.set(purchaseId, purchase);
+
+  const approvalText = `Approve purchase ${purchaseId}: ${product.title} (${product.color}) for ${formatMoney(product)} at ${product.merchantName}.`;
+  const existingCards = cardsOnFile.map((c) => ({ ...c, label: formatCardLabel(c) }));
+  const nextStep = buildProposeNextStep(existingCards);
+  return { purchaseId, approvalRequired: true, approvalText, buyerId, product, existingCards, nextStep };
+}
+
+function buildProposeNextStep(cards) {
+  if (cards.length === 0) {
+    return "Confirm the product and price with the user. After they say yes, call purchase_approved_product with approved=true — a browser tab will open for them to enter card details.";
+  }
+  return "ALWAYS present the payment-method table verbatim to the user and ask them to pick a numbered card OR 'new'. Do NOT assume a default even when only one card is on file. After the user picks: call purchase_approved_product with approved=true and either cardId=<their chosen card's id> or useExistingCard=false if they chose 'new'.";
+}
+
+async function handlePurchaseApprovedProduct(args, ctx) {
+  if (!args.approved) throw new Error("Purchase was not approved by the user.");
+  const purchase = await ctx.purchaseStore.get(args.purchaseId);
+  if (!purchase) throw new Error(`Unknown purchaseId: ${args.purchaseId}`);
+  if (purchase.status === "completed") return purchase.result;
+
+  const previousStatus = purchase.status;
+  purchase.status = "running";
+  const product = purchase.product;
+  const buyerId = purchase.buyerId || ctx.defaultBuyerId;
+  const consumerEmail = args.consumerEmail || ctx.defaultConsumerEmail;
+  const waitForBrowser = args.waitForBrowser ?? ctx.defaultWaitForBrowser;
+
+  if (args.useExistingCard === false) purchase.forceNewCard = true;
+
+  let cardId = purchase.cardId ?? args.cardId ?? null;
+  if (!cardId && !purchase.forceNewCard) {
+    const cards = await getCardsForBuyer(ctx, buyerId);
+    if (cards.length > 0) cardId = cards[0].cardId;
+  }
+
+  let collect = purchase.collect ?? null;
+  if (!cardId && previousStatus === "waiting_for_card" && collect) {
+    const cardSession = waitForBrowser
+      ? await waitForSession(ctx, collect.sessionId, ctx.waitMs)
+      : await apiFetch(ctx, `/sessions/${encodeURIComponent(collect.sessionId)}`, { allow404: true });
+    if (!cardSession) {
+      purchase.status = "waiting_for_card";
+      await ctx.purchaseStore.set(purchase.id, purchase);
+      return { status: "waiting_for_card", purchaseId: purchase.id, collect, message: "Open the collect URL and save a card." };
+    }
+    cardId = cardSession.cardId;
+    if (!cardId) throw new Error("Card collection completed without cardId.");
+    purchase.cardId = cardId;
+  }
+
+  if (!cardId) {
+    const sessionId = createId("collect");
+    const collectUrl = buildAppUrl(ctx, "/collect.html", { sessionId, buyer_id: buyerId });
+    const opened = ctx.openBrowser(collectUrl);
+    collect = { sessionId, url: collectUrl, opened };
+    purchase.collect = collect;
+
+    if (!waitForBrowser) {
+      purchase.status = "waiting_for_card";
+      await ctx.purchaseStore.set(purchase.id, purchase);
+      return {
+        status: "waiting_for_card",
+        purchaseId: purchase.id,
+        collect,
+        message: "Open the collect URL, save a card, then call purchase_approved_product again.",
+      };
+    }
+
+    const cardSession = await waitForSession(ctx, sessionId, ctx.waitMs);
+    cardId = cardSession.cardId;
+    if (!cardId) throw new Error("Card collection completed without cardId.");
+    purchase.cardId = cardId;
+  }
+
+  let tokenId = purchase.tokenId;
+  if (!tokenId) {
+    const token = await enrollAgenticToken(ctx, cardId, consumerEmail);
+    tokenId = token?.data?.id;
+    if (!tokenId) throw new Error(`Token enrollment returned no id: ${JSON.stringify(token)}`);
+    purchase.tokenId = tokenId;
+  }
+
+  let binding = purchase.binding ?? null;
+  let assuranceData = purchase.assuranceData ?? null;
+  if (!assuranceData && previousStatus === "waiting_for_authentication" && binding) {
+    const bindingSession = waitForBrowser
+      ? await waitForSession(ctx, binding.sessionId, ctx.waitMs)
+      : await apiFetch(ctx, `/sessions/${encodeURIComponent(binding.sessionId)}`, { allow404: true });
+    if (!bindingSession) {
+      purchase.status = "waiting_for_authentication";
+      await ctx.purchaseStore.set(purchase.id, purchase);
+      return {
+        status: "waiting_for_authentication",
+        purchaseId: purchase.id,
+        cardId, tokenId, collect, binding,
+        message: "Open the binding URL and complete Visa authentication.",
+      };
+    }
+    assuranceData = bindingSession.assuranceData;
+    if (!assuranceData) throw new Error("Visa authentication completed without assuranceData.");
+    purchase.assuranceData = assuranceData;
+  }
+
+  if (!assuranceData) {
+    const bindingSessionId = createId("binding");
+    const bindingUrl = buildAppUrl(ctx, "/binding.html", {
+      sessionId: bindingSessionId,
+      buyer_id: buyerId,
+      tokenId,
+      product_name: product.title,
+      merchant_name: product.merchantName,
+      amount: formatAmount(product.price),
+      currency: product.currency,
+      currency_code: currencyNumericCode(product.currency),
+      consumer_email: consumerEmail,
+      environment: ctx.defaultEnvironment,
+    });
+    binding = { sessionId: bindingSessionId, url: bindingUrl, opened: ctx.openBrowser(bindingUrl) };
+    purchase.binding = binding;
+  }
+
+  if (!assuranceData && !waitForBrowser) {
+    purchase.status = "waiting_for_authentication";
+    purchase.cardId = cardId;
+    purchase.tokenId = tokenId;
+    await ctx.purchaseStore.set(purchase.id, purchase);
+    return {
+      status: "waiting_for_authentication",
+      purchaseId: purchase.id,
+      cardId, tokenId, collect, binding,
+      message: "Open the binding URL, complete Visa authentication, then call purchase_approved_product again.",
+    };
+  }
+
+  if (!assuranceData) {
+    const bindingSession = await waitForSession(ctx, binding.sessionId, ctx.waitMs);
+    assuranceData = bindingSession.assuranceData;
+    if (!assuranceData) throw new Error("Visa authentication completed without assuranceData.");
+    purchase.assuranceData = assuranceData;
+  }
+
+  const intent = await createIntent(ctx, tokenId, assuranceData, product);
+  const intentId = intent?.data?.id;
+  if (!intentId) throw new Error(`Intent creation returned no id: ${JSON.stringify(intent)}`);
+
+  const cryptogram = await getCryptogram(ctx, tokenId, intentId, product);
+  const paymentCredential = cryptogram?.data?.attributes;
+  if (!paymentCredential) throw new Error(`Cryptogram response returned no payment credential: ${JSON.stringify(cryptogram)}`);
+
+  const result = {
+    status: "completed",
+    purchaseId: purchase.id,
+    buyerId, product, cardId, tokenId, intentId, collect, binding,
+    cryptogramId: cryptogram.data.id,
+    paymentCredential,
+  };
+  purchase.status = "completed";
+  purchase.result = result;
+  await ctx.purchaseStore.set(purchase.id, purchase);
+  return result;
+}
+
+async function handleListBuyerCards(args, ctx) {
+  const buyerId = args.buyerId || ctx.defaultBuyerId;
+  const cards = await getCardsForBuyer(ctx, buyerId);
+  return { buyerId, cards: cards.map((c) => ({ ...c, label: formatCardLabel(c) })) };
+}
+
+async function handleForgetCard(args, ctx) {
+  const buyerId = args.buyerId || ctx.defaultBuyerId;
+  const path = args.cardId
+    ? `/merchant/cards/${encodeURIComponent(buyerId)}?cardId=${encodeURIComponent(args.cardId)}`
+    : `/merchant/cards/${encodeURIComponent(buyerId)}`;
+  const response = await apiFetch(ctx, path, { method: "DELETE", allow404: true });
+  return { buyerId, cardId: args.cardId ?? null, forgotten: Boolean(response?.deleted) };
+}
+
+// --- Backend client + browser bridge polling ---
+
+async function getCardsForBuyer(ctx, buyerId) {
+  try {
+    const response = await apiFetch(ctx, `/merchant/cards/${encodeURIComponent(buyerId)}`, { allow404: true });
+    return Array.isArray(response?.cards) ? response.cards : [];
+  } catch (err) {
+    log(`getCardsForBuyer fallback: ${err.message}`);
+    return [];
+  }
+}
+
+async function enrollAgenticToken(ctx, cardId, consumerEmail) {
+  return apiFetch(ctx, `/cards/${encodeURIComponent(cardId)}/agentic-tokens`, {
+    method: "POST",
+    body: { data: { type: "agentic_tokens", attributes: { consumer_email: consumerEmail } } },
+  });
+}
+
+async function createIntent(ctx, tokenId, assuranceData, product) {
+  const effectiveUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  return apiFetch(ctx, `/intents?tokenId=${encodeURIComponent(tokenId)}`, {
+    method: "POST",
+    body: {
+      data: {
+        type: "intents",
+        attributes: {
+          consumer_prompt: `Allow purchase of ${product.title} for ${formatMoney(product)} at ${product.merchantName}`,
+          assurance_data: assuranceData,
+          mandates: [{
+            description: `One-time purchase: ${product.title}`,
+            merchant_category: "Shoes",
+            preferred_merchant_name: product.merchantName,
+            merchant_category_code: product.mcc,
+            decline_threshold: { amount: product.price, currency_code: product.currency },
+            effective_until: effectiveUntil,
+            quantity: 1,
+          }],
+        },
+      },
+    },
+  });
+}
+
+async function getCryptogram(ctx, tokenId, intentId, product) {
+  return apiFetch(ctx, `/cryptograms?tokenId=${encodeURIComponent(tokenId)}&intentId=${encodeURIComponent(intentId)}`, {
+    method: "POST",
+    body: {
+      data: {
+        type: "cryptograms",
+        attributes: {
+          transaction_data: [{
+            merchant_country_code: product.merchantCountry,
+            transaction_amount: {
+              transaction_amount: formatAmount(product.price),
+              transaction_currency_code: product.currency,
+            },
+            merchant_url: product.merchantUrl,
+            merchant_name: product.merchantName,
+          }],
+        },
+      },
+    },
+  });
+}
+
+async function waitForSession(ctx, sessionId, timeoutMs) {
+  const expiresAt = Date.now() + timeoutMs;
+  while (Date.now() < expiresAt) {
+    const session = await apiFetch(ctx, `/sessions/${encodeURIComponent(sessionId)}`, { allow404: true });
+    if (session?.status === "completed") return session;
+    await sleep(ctx.pollMs);
+  }
+  throw new Error(`Timed out waiting for browser session ${sessionId}.`);
+}
+
+async function apiFetch(ctx, path, { method = "GET", body, allow404 = false } = {}) {
+  const url = `${ctx.apiBaseUrl}${path}`;
+  const response = await ctx.fetchImpl(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const text = await response.text();
+  let data = null;
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  }
+  if (allow404 && response.status === 404) return null;
+  if (!response.ok) throw new Error(`${method} ${url} failed (${response.status}): ${text}`);
+  return data;
+}
+
+function buildAppUrl(ctx, path, params) {
+  const url = new URL(path, ctx.appBaseUrl);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  return url.toString();
+}
+
+function deriveAppBaseUrl(apiBaseUrl) {
+  // /api → strip suffix to get the site root that serves /collect.html, /binding.html
+  return apiBaseUrl.replace(/\/api\/?$/, "") || apiBaseUrl;
+}
+
+// --- Result formatting (returned in CallToolResult.content[]) ---
+
+async function wrapToolResult(name, fn) {
+  try {
+    const structuredContent = await fn();
+    return {
+      content: [{ type: "text", text: formatToolText(name, structuredContent) }],
+      structuredContent,
+      isError: false,
+    };
+  } catch (err) {
+    return {
+      content: [{ type: "text", text: `❌ **${name}** failed\n\n${err.message}` }],
+      structuredContent: { error: err.message },
+      isError: true,
+    };
+  }
+}
+
+function formatToolText(name, result) {
+  if (name === "search_products") return formatSearchProducts(result);
+  if (name === "propose_purchase") return formatProposePurchase(result);
+  if (name === "purchase_approved_product") return formatPurchaseResult(result);
+  if (name === "list_buyer_cards") return formatBuyerCards(result);
+  if (name === "forget_card") return formatForgetCard(result);
+  return JSON.stringify(result);
+}
+
+function formatSearchProducts(result) {
+  if (result.products.length === 0) return "🔍 No matching products in stock.";
+  const header = "| # | Product | Price | ID |\n|---|---|---:|---|";
+  const rows = result.products.map((p, i) =>
+    `| ${i + 1} | **${p.title}** _(${p.color})_ | $${formatAmount(p.price)} ${p.currency} | \`${p.id}\` |`,
+  ).join("\n");
+  const plural = result.products.length === 1 ? "match" : "matches";
+  return `🔍 Found ${result.products.length} ${plural}\n\n${header}\n${rows}`;
+}
+
+function formatProposePurchase(result) {
+  const p = result.product;
+  const lines = [
+    `📦 **Approval requested** — \`${result.purchaseId}\``,
+    "",
+    "| | |",
+    "|---|---|",
+    `| Product | ${p.title} _(${p.color})_ |`,
+    `| Price | **$${formatAmount(p.price)} ${p.currency}** |`,
+    `| Merchant | ${p.merchantName} |`,
+  ];
+  const cards = result.existingCards ?? [];
+  if (cards.length === 0) {
+    lines.push("", "💳 No cards on file — a browser tab will open to add one.");
+  } else {
+    lines.push("", "💳 **Payment method** — pick one:", "", "| # | Card | ID |", "|---|---|---|");
+    cards.forEach((c, i) => { lines.push(`| **${i + 1}** | ${c.label} | \`${c.cardId}\` |`); });
+    lines.push(`| **new** | Add a different card | — |`);
+  }
+  lines.push("", `_${result.nextStep}_`);
+  return lines.join("\n");
+}
+
+function formatPurchaseResult(result) {
+  if (result.status !== "completed") {
+    const url = result.collect?.url || result.binding?.url;
+    const action = result.status === "waiting_for_card"
+      ? "Open the card form in your browser:"
+      : "Complete Visa authentication in your browser:";
+    const niceStatus = result.status.replace(/_/g, " ");
+    const msg = result.message ? `\n\n${result.message}` : "";
+    return `⏳ **${niceStatus}**\n\n${action}\n${url}${msg}`;
+  }
+  const p = result.product;
+  const lines = [
+    `✅ **Purchase authorized** — \`${result.purchaseId}\``,
+    "",
+    "| | |",
+    "|---|---|",
+    `| Product | ${p.title} |`,
+    `| Amount | **$${formatAmount(p.price)} ${p.currency}** |`,
+    `| Merchant | ${p.merchantName} |`,
+    `| Card | \`${result.cardId}\` |`,
+    `| Intent | \`${result.intentId}\` |`,
+    `| Cryptogram | \`${result.cryptogramId}\` |`,
+  ];
+  return lines.join("\n");
+}
+
+function formatBuyerCards(result) {
+  if (result.cards.length === 0) return `💳 No cards on file for \`${result.buyerId}\`.`;
+  const header = "| # | Card | ID |\n|---|---|---|";
+  const rows = result.cards.map((c, i) => `| **${i + 1}** | ${c.label} | \`${c.cardId}\` |`).join("\n");
+  return `💳 **Cards on file for \`${result.buyerId}\`**\n\n${header}\n${rows}`;
+}
+
+function formatForgetCard(result) {
+  if (!result.forgotten) {
+    return result.cardId
+      ? `ℹ️ No card \`${result.cardId}\` was stored for \`${result.buyerId}\`.`
+      : `ℹ️ No cards were stored for \`${result.buyerId}\`.`;
+  }
+  return result.cardId
+    ? `🗑️ Removed card \`${result.cardId}\` for \`${result.buyerId}\`.`
+    : `🗑️ Cleared all cards for \`${result.buyerId}\`.`;
+}
+
+function formatCardLabel(card) {
+  const brand = `[${normalizeBrand(card.brand)}]`;
+  const number = card.lastFour ? `****${card.lastFour}` : `…${card.cardId.slice(-4)}`;
+  const exp = card.expMonth && card.expYear
+    ? ` ${String(card.expMonth).padStart(2, "0")}/${String(card.expYear).slice(-2)}`
+    : "";
+  return `${brand} ${number}${exp}`;
+}
+
+function normalizeBrand(brand) {
+  if (!brand) return "CARD";
+  return String(brand).toUpperCase().replace(/[\s_]+/g, "-");
+}
+
+// --- Utils ---
+
+function log(message) {
+  process.stderr.write(`[agentic-tokens-mcp] ${message}\n`);
+}
+
+function formatMoney(product) {
+  return `${formatAmount(product.price)} ${product.currency}`;
+}
+
+function formatAmount(amount) {
+  return Number(amount).toFixed(2);
+}
+
+function currencyNumericCode(currency) {
+  return { USD: "840", EUR: "978", GBP: "826", JPY: "392", AUD: "036", CAD: "124" }[currency] ?? "840";
+}
+
+function createId(prefix) {
+  return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// --- Built-in purchase stores ---
+
+export class InMemoryPurchaseStore {
+  #map = new Map();
+  async get(id) { return this.#map.get(id) ?? null; }
+  async set(id, value) { this.#map.set(id, value); }
+  async delete(id) { this.#map.delete(id); }
+}
