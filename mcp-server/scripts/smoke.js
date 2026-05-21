@@ -88,6 +88,7 @@ const child = spawn(process.execPath, ["src/index.js"], {
   env: {
     ...process.env,
     AGENTIC_OPEN_BROWSER: "false",
+    AGENTIC_LOCAL_PREVIEW: "false", // exercise the HTTP-style path; we mock /api/sites
     AGENTIC_APP_BASE_URL: baseUrl,
     AGENTIC_API_BASE_URL: `${baseUrl}/api`,
   },

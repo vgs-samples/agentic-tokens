@@ -10,11 +10,15 @@
 //   - mcp-server/src/index.js     stdio (local install, auto-opens browser)
 //   - netlify/functions/mcp.js    Web Standard HTTP (deployed, no browser open)
 
+import { writeFile, mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
+import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { renderMarketingSite, THEME_COLORS } from "./agency.js";
 
-const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.5.3" };
+const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.6.0" };
 
 // Zod schema for the JSON `params` the LLM produces. Matches the shape consumed by
 // renderMarketingSite() in agency.js. Almost everything is optional — defaults in
@@ -164,6 +168,7 @@ export function createMcpServer(options) {
     waitForBrowser: defaultWaitForBrowser = true,
     waitMs = DEFAULT_WAIT_MS,
     pollMs = DEFAULT_POLL_MS,
+    localPreview = false,
   } = options;
 
   if (!apiBaseUrl) throw new Error("createMcpServer: apiBaseUrl is required");
@@ -182,6 +187,7 @@ export function createMcpServer(options) {
     defaultWaitForBrowser,
     waitMs,
     pollMs,
+    localPreview,
   };
 
   const server = new McpServer(SERVER_INFO, { instructions: SERVER_INSTRUCTIONS });
@@ -302,8 +308,29 @@ async function handleRenderMarketingSite(args, ctx) {
   const companyName = params.brand?.name ?? null;
   const siteId = createId("site").replace("site_", "s").slice(0, 8);
 
-  // Store rendered HTML so /preview/<siteId> can serve it. Status="preview" means
-  // /s/<siteId> still 404s — it only flips to "published" via publish_site.
+  if (ctx.localPreview) {
+    // Local mode (stdio): write HTML to disk and open in the user's default
+    // browser via openBrowser(). No round-trip through Netlify for preview.
+    const localDir = joinPath(tmpdir(), "vgs-marketing-agency");
+    await mkdir(localDir, { recursive: true });
+    const localPath = joinPath(localDir, `${siteId}.html`);
+    await writeFile(localPath, html);
+    const previewUrl = pathToFileURL(localPath).href;
+    const opened = ctx.openBrowser(previewUrl);
+    return {
+      status: "preview",
+      siteId,
+      previewUrl,
+      previewPath: localPath,
+      companyName,
+      opened,
+      nextStep: opened
+        ? `Preview opened locally in the user's default browser (${previewUrl}). Wait for them to review it, then ask "Опубликовать за $5/мес?" and call publish_site with the SAME params.`
+        : `Preview written to ${localPath}. Tell the user the file path or open ${previewUrl} manually. Then ask "Опубликовать за $5/мес?" and call publish_site with the SAME params.`,
+    };
+  }
+
+  // HTTP mode: store on the server so /preview/<siteId> can serve it.
   await apiFetch(ctx, `/sites`, {
     method: "POST",
     body: { siteId, html, buyerId: ctx.defaultBuyerId, companyName, status: "preview" },
@@ -311,10 +338,6 @@ async function handleRenderMarketingSite(args, ctx) {
 
   const previewUrl = `${ctx.appBaseUrl}/preview/${siteId}`;
   // Small, self-contained artifact body — just an iframe pointing at /preview.
-  // It's intentionally tiny: the LLM is reliably willing to write 5 lines of HTML
-  // into an artifact (so Claude Desktop renders the artifact panel). Writing
-  // a 5KB HTML document into an artifact, by contrast, often makes the model
-  // fall back to dumping the HTML in chat as text.
   const artifactHtml = `<!doctype html><html><body style="margin:0;padding:0;height:100vh"><iframe src="${previewUrl}" style="width:100%;height:100%;border:0" loading="eager"></iframe></body></html>`;
 
   return {
