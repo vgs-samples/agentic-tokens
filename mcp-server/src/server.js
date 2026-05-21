@@ -26,20 +26,20 @@ const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.6.0" };
 const siteParamsSchema = z.object({
   brand: z.object({
     emoji: z.string().describe("Single emoji for the brand logo, e.g. '🍓'."),
-    name: z.string().describe("Brand name, e.g. 'СвежаяКлубника'."),
+    name: z.string().describe("Brand name, e.g. 'FreshBerry'."),
   }),
   themeColor: z.enum([...THEME_COLORS]).describe("Tailwind color family used throughout the page. Pick one that fits the brand theme."),
-  language: z.enum(["ru", "en"]).optional().describe("Page language. Defaults to 'ru'."),
+  language: z.enum(["en", "ru"]).optional().describe("Page language. Defaults to 'en'."),
   hero: z.object({
-    badge: z.string().describe("Small pill above the hero headline, e.g. '🌱 Сезон открыт · Сбор каждое утро'."),
+    badge: z.string().describe("Small pill above the hero headline, e.g. '🌱 Fresh harvest · Picked every morning'."),
     headlineLines: z.array(z.string()).length(3).describe("Hero h1 split into exactly 3 lines. The middle line is rendered in the theme accent color."),
     tagline: z.string().describe("One-paragraph hero tagline under the headline."),
-    primaryCta: z.string().describe("Primary CTA button text, e.g. 'Заказать доставку'."),
-    secondaryCta: z.string().describe("Secondary CTA button text, e.g. 'Посмотреть цены'."),
+    primaryCta: z.string().describe("Primary CTA button text, e.g. 'Order delivery'."),
+    secondaryCta: z.string().describe("Secondary CTA button text, e.g. 'View pricing'."),
     usps: z.array(z.string()).length(3).describe("Three short USP markers shown below the CTAs, each prefixed with a green checkmark."),
   }),
   stats: z.array(z.object({
-    value: z.string().describe("Stat value, e.g. '100%' or '3 ч'."),
+    value: z.string().describe("Stat value, e.g. '100%' or '3 hrs'."),
     label: z.string().describe("Short label under the value."),
   })).length(4).describe("Four stat cards on the colored band under the hero."),
   about: z.object({
@@ -65,13 +65,13 @@ const siteParamsSchema = z.object({
     eyebrow: z.string(),
     headline: z.string(),
     subtitle: z.string(),
-    popularBadge: z.string().describe("Badge text on the middle (highlighted) tier, e.g. 'ХИТ' or 'POPULAR'."),
+    popularBadge: z.string().describe("Badge text on the middle (highlighted) tier, e.g. 'POPULAR'."),
     tiers: z.array(z.object({
       icon: z.string().describe("Emoji or short string."),
       name: z.string(),
       subtitle: z.string(),
-      price: z.string().describe("Price string, e.g. '500₽' or '$29'."),
-      unit: z.string().describe("Unit suffix, e.g. '/мес' or '/kg'."),
+      price: z.string().describe("Price string, e.g. '$19' or '$29'."),
+      unit: z.string().describe("Unit suffix, e.g. '/mo' or '/kg'."),
       bullets: z.array(z.string()).min(2).max(5),
       cta: z.string(),
     })).length(3).describe("Exactly three pricing tiers. The middle one renders highlighted with popularBadge."),
@@ -325,8 +325,8 @@ async function handleRenderMarketingSite(args, ctx) {
       companyName,
       opened,
       nextStep: opened
-        ? `Preview opened locally in the user's default browser (${previewUrl}). Wait for them to review it, then ask "Опубликовать за $5/мес?" and call publish_site with the SAME params.`
-        : `Preview written to ${localPath}. Tell the user the file path or open ${previewUrl} manually. Then ask "Опубликовать за $5/мес?" and call publish_site with the SAME params.`,
+        ? `Preview opened locally in the user's default browser (${previewUrl}). Wait for them to review it, then ask "Publish for $5/month?" and call publish_site with the SAME params.`
+        : `Preview written to ${localPath}. Tell the user the file path or open ${previewUrl} manually. Then ask "Publish for $5/month?" and call publish_site with the SAME params.`,
     };
   }
 
@@ -351,7 +351,7 @@ async function handleRenderMarketingSite(args, ctx) {
 2) If you have an artifacts capability (Claude Desktop): create an artifact with type="text/html" and artifactHtml as the body.
 3) Otherwise: include previewUrl as a clickable link.
 
-Do NOT paste raw HTML in chat as a code block. After the user reviews, ask "Опубликовать за $5/мес?" and call publish_site with the SAME params.`,
+Do NOT paste raw HTML in chat as a code block. After the user reviews, ask "Publish for $5/month?" and call publish_site with the SAME params.`,
   };
 }
 
@@ -760,7 +760,7 @@ function formatRenderSite(result) {
     `2. **Claude Desktop / Claude.ai web (artifacts capability)**: create an artifact with type="text/html" whose body is the \`artifactHtml\` string. Claude will open it in the side panel.`,
     `3. **No Write, no artifacts**: paste \`${result.previewUrl}\` as a clickable link in your reply — the user can open it in a browser tab.`,
     ``,
-    `Do NOT paste raw HTML into chat as a code block — that's the worst UX. After showing the preview, ask: "Опубликовать за $5/мес?" Wait for explicit yes before calling publish_site.`,
+    `Do NOT paste raw HTML into chat as a code block — that's the worst UX. After showing the preview, ask: "Publish for $5/month?" Wait for explicit yes before calling publish_site.`,
     ``,
     `Preview URL (always available as a fallback): ${result.previewUrl}`,
   ].join("\n");

@@ -19,7 +19,7 @@ Built on `@modelcontextprotocol/sdk@^1.29`. Two transports ship together:
 ## Demo script
 
 ```text
-You: Сделай мне маркетинговый сайт для "Acme Coffee Co" — премиум кофе с подпиской.
+You: Make me a marketing site for "Acme Coffee Co" — premium coffee with a subscription.
 
 Agent: [Generates full HTML inline; creates an HTML Artifact]
        Claude Desktop opens the artifact side panel and renders the page live.
