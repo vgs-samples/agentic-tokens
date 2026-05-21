@@ -6,11 +6,10 @@ The MCP server exposes the agency's product surface; the React app on the same s
 
 ## What's in the box
 
-- **`create_marketing_site(brief, companyName, …)`** — generates a real HTML landing page from a brief, stores it as a draft.
-- **`deploy_site(siteId)`** — publishes the page so it becomes reachable at `/s/<siteId>`. If the buyer has no active subscription, returns `status: payment_required` with a `paymentRequestId`.
+- **`publish_site(html, companyName?, buyerId?)`** — the agent generates the full HTML itself, renders it as an Artifact in Claude Desktop for the user to preview, then calls this tool to publish. Returns the live `/s/<siteId>` URL on success, or `status: payment_required` with a `paymentRequestId` if the buyer has no active subscription.
 - **`authorize_subscription(paymentRequestId)`** — triggers the existing VGS device-binding flow (opens `/binding.html` for TouchID / FIDO / OTP) and creates a recurring intent + cryptogram. Marks the buyer as having an active subscription for 30 days.
 - **`list_subscriptions(buyerId?)`** / **`cancel_subscription(buyerId?)`** — read/cancel.
-- **`list_buyer_cards(buyerId?)`** / **`forget_card(buyerId?, cardId?)`** — same card management as the underlying VGS demo.
+- **`list_buyer_cards(buyerId?)`** / **`forget_card(buyerId?, cardId?)`** — card management.
 
 Built on `@modelcontextprotocol/sdk@^1.29`. Two transports ship together:
 
@@ -20,14 +19,17 @@ Built on `@modelcontextprotocol/sdk@^1.29`. Two transports ship together:
 ## Demo script
 
 ```text
-You: Сделай мне сайт для маркетингового агентства "Acme Marketing",
-     минимальный, с hero-секцией и CTA.
+You: Сделай мне маркетинговый сайт для "Acme Coffee Co" — премиум кофе с подпиской.
 
-Agent: [create_marketing_site] → siteId=ax9k2, draft
-       ✓ Generated. Preview: https://vgs-agentic-tokens.netlify.app/s/ax9k2
+Agent: [Generates full HTML inline; creates an HTML Artifact]
+       Claude Desktop opens the artifact side panel and renders the page live.
 
-       [deploy_site(ax9k2)] → payment_required: $5/month
-       VGS Marketing Agency charges $5/month to host this site. Authorize?
+       "Shall I publish this for $5/month?"
+
+You:  yes
+
+Agent: [publish_site(html, companyName="Acme Coffee Co")] → payment_required, prXYZ
+       "Hosting needs a $5/month VGS Marketing Agency subscription. Approve?"
 
 You:  yes
 
@@ -40,20 +42,30 @@ You:  [opens, completes TouchID, comes back] "done"
 Agent: [authorize_subscription(prXYZ) — resume] → status: completed
        ✅ Subscription active until 2026-06-20.
 
-       [deploy_site(ax9k2) — retry] → status: published
-       🚀 Live: https://vgs-agentic-tokens.netlify.app/s/ax9k2
+       [publish_site(html, …) — retry with the SAME html] → status: published
+       🚀 Live: https://vgs-agentic-tokens.netlify.app/s/sXXX
 ```
 
-The user clicks the live URL, sees a real marketing page hosted on the same Netlify site.
+The user clicks the live URL and sees the same page they previewed in the Artifact panel — now public.
 
-## How "the agent auto-proposes payment" actually works
+## Where the HTML is generated
+
+The agent (Claude in the chat) writes the full HTML itself, using Tailwind via CDN and picsum images. The MCP server has **no HTML template** — it only stores already-paid-for HTML and hosts it at `/s/:id`.
+
+This means:
+- The HTML is generated **client-side** in the user's Claude Desktop session
+- The user previews it in the **Artifact panel** before any server contact for the HTML body
+- The HTML only reaches the server **after the user confirms publishing**
+- After payment, `/s/:id` serves it permanently (24-hour TTL on the Blob)
+
+## How "the agent auto-proposes payment" works
 
 It's the **402 pattern over MCP**, not prompt engineering:
 
-1. `deploy_site` returns `{ status: "payment_required", amount, currency, paymentRequestId, description, nextStep }`.
-2. Any decent LLM (Claude 3.5+, GPT-4o+) reads `nextStep` and surfaces the question to the user before calling any other tool.
+1. `publish_site(html, …)` returns `{ status: "payment_required", paymentRequestId, amount, plan, description, nextStep }`.
+2. Any decent LLM reads `nextStep` and surfaces the question to the user.
 3. After the user agrees, the agent calls `authorize_subscription(paymentRequestId)` — that tool runs the VGS binding + intent + cryptogram flow.
-4. The agent retries `deploy_site` and gets `status: published` this time.
+4. The agent retries `publish_site` with the same HTML, and gets `status: published`.
 
 The recurring mandate created on the VGS side has:
 - `decline_threshold: { amount: 5, currency_code: "USD" }`
@@ -154,4 +166,4 @@ cd mcp-server
 node scripts/smoke.js
 ```
 
-Spawns a mock backend on an ephemeral port and round-trips `initialize` + `tools/list` + `create_marketing_site` + `deploy_site` (expecting `payment_required`) over stdio.
+Spawns a mock backend on an ephemeral port and round-trips `initialize` + `tools/list` + `publish_site` (expecting `payment_required`) over stdio.
