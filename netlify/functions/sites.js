@@ -3,9 +3,14 @@ import { json, wrap } from "./_lib.js";
 
 // Sites store: siteId → { html, buyerId, companyName, status, createdAt, expiresAt }
 //
-// Two public entry points share this function:
-//   /s/:siteId                — public HTML rendering (served to the world)
-//   /api/sites and /api/sites/:siteId — MCP-side CRUD
+// Public entry points:
+//   /s/:siteId                — published site rendering (404 if not found / expired)
+//   /api/sites                — POST to publish a site (MCP-side)
+//   /api/sites/:siteId        — GET / PUT / DELETE for management
+//
+// There is no preview/draft on the server: the agent renders the draft as an
+// Artifact in Claude Desktop before publishing. The server only stores already-
+// paid-for, published sites.
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -13,20 +18,28 @@ export default wrap(async (req) => {
   const url = new URL(req.url);
   const store = getStore("agentic-sites");
 
-  // Public rendering: GET /s/<siteId>
+  // Published site rendering: GET /s/<siteId>
   const publicMatch = url.pathname.match(/^\/s\/([^/]+)\/?$/);
   if (publicMatch) {
     const siteId = publicMatch[1];
     const site = await readSite(store, siteId);
-    if (!site) return new Response("Site not found", { status: 404 });
-    if (site.status !== "published") {
-      return new Response(paymentRequiredHtml(site), {
-        status: 402,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      });
+    if (!site || site.status !== "published") {
+      return new Response("Site not found", { status: 404 });
     }
     return new Response(site.html, {
-      headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        // Basic CSP — the agent-generated HTML can pull Tailwind/fonts from
+        // common CDNs and images, but cannot execute inline scripts or
+        // exfiltrate via custom origins.
+        "Content-Security-Policy":
+          "default-src 'self' 'unsafe-inline' https: data:; " +
+          "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; " +
+          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+          "font-src https://fonts.gstatic.com data:; " +
+          "img-src 'self' https: data:;",
+      },
     });
   }
 
@@ -38,29 +51,17 @@ export default wrap(async (req) => {
   if (req.method === "POST" && !siteId) {
     const body = await req.json().catch(() => ({}));
     if (!body.siteId || !body.html) return json(400, { error: "siteId and html required" });
-    const expiresAt = Date.now() + TTL_MS;
     const record = {
       siteId: body.siteId,
       buyerId: body.buyerId ?? null,
       companyName: body.companyName ?? null,
-      brief: body.brief ?? null,
       html: body.html,
-      status: body.status ?? "draft",
+      status: body.status ?? "published",
       createdAt: Date.now(),
-      expiresAt,
+      expiresAt: Date.now() + TTL_MS,
     };
     await store.setJSON(body.siteId, record);
-
-    // One-site-per-buyer cleanup: drop any previous site this buyer owned.
-    if (body.buyerId) {
-      const ownerKey = `__owner__/${body.buyerId}`;
-      const previous = await store.get(ownerKey, { type: "json" });
-      if (previous?.siteId && previous.siteId !== body.siteId) {
-        await store.delete(previous.siteId);
-      }
-      await store.setJSON(ownerKey, { siteId: body.siteId });
-    }
-    return json(200, { ...stripHtml(record) });
+    return json(200, stripHtml(record));
   }
 
   if (req.method === "GET" && siteId) {
@@ -99,22 +100,4 @@ async function readSite(store, siteId) {
 function stripHtml(record) {
   const { html, ...rest } = record;
   return { ...rest, hasHtml: Boolean(html) };
-}
-
-function paymentRequiredHtml(site) {
-  const name = (site.companyName || "this site").replace(/</g, "&lt;");
-  return `<!doctype html>
-<html><head><meta charset="utf-8"><title>Payment required</title>
-<style>
-  body { font: 16px/1.5 system-ui; max-width: 540px; margin: 80px auto; padding: 0 20px; color: #1f2937; }
-  .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 12px; }
-  code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
-</style></head>
-<body>
-  <span class="badge">402 Payment Required</span>
-  <h1 style="margin-top: 8px;">Almost there.</h1>
-  <p>${name} is generated but not yet published.</p>
-  <p>VGS Marketing Agency requires an active <strong>$5/month hosting subscription</strong> to make this site live.</p>
-  <p style="color: #6b7280; font-size: 14px;">Site id: <code>${site.siteId}</code></p>
-</body></html>`;
 }

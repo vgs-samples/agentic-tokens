@@ -77,13 +77,13 @@ netlify dev
 
 On top of the Agentic Tokens building blocks, the repo ships a quick-start demo of a fictional dev-tool startup called **VGS Marketing Agency**. It lets any AI agent connected via MCP:
 
-1. generate a real marketing landing page from a one-line brief,
-2. attempt to deploy it — the server returns `payment_required` ($5/month hosting),
+1. **generate a marketing landing page in the chat itself** — Claude writes the HTML, renders it as an Artifact for the user to preview live,
+2. attempt to publish — the server returns `payment_required` ($5/month hosting),
 3. propose the subscription to the user,
-4. on user approval, run the existing VGS device-binding flow (TouchID / FIDO / OTP) and create a recurring intent + cryptogram,
-5. publish the site at `https://<your-site>/s/<siteId>` — a real, browsable URL.
+4. on approval, run the existing VGS device-binding flow (TouchID / FIDO / OTP) and create a recurring intent + cryptogram,
+5. retry `publish_site` with the same HTML — site becomes live at `https://<your-site>/s/<siteId>`.
 
-All deployed sites live on the same Netlify project; each new generation per buyer overwrites the previous one (24-hour TTL, no orphan cleanup needed).
+The HTML is generated client-side by the LLM and only reaches the server after the user pays. No server-side template, no drafts.
 
 Two transports ship together:
 

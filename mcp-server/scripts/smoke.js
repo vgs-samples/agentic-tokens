@@ -116,38 +116,31 @@ await waitFor(() => messages.find((m) => m.id === 1), 2000);
 
 send({ jsonrpc: "2.0", method: "notifications/initialized" });
 send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+const sampleHtml = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Acme Coffee Co</title>
+<script src="https://cdn.tailwindcss.com"></script></head>
+<body class="bg-white p-12">
+  <h1 class="text-5xl font-bold">Acme Coffee Co</h1>
+  <p class="mt-4 text-gray-600">Premium hand-roasted beans, shipped weekly.</p>
+</body></html>`;
+
 send({
   jsonrpc: "2.0", id: 3, method: "tools/call",
-  params: { name: "create_marketing_site", arguments: {
+  params: { name: "publish_site", arguments: {
+    html: sampleHtml,
     companyName: "Acme Coffee Co",
-    brief: "Premium hand-roasted beans, shipped weekly.",
-    style: "modern",
   } },
 });
 
 await waitFor(() => messages.find((m) => m.id === 3), 4000);
-
-const createResult = messages.find((m) => m.id === 3);
-const siteId = createResult?.result?.structuredContent?.siteId;
-if (!siteId) {
-  console.error("create_marketing_site failed:", JSON.stringify(createResult, null, 2));
-  cleanupAndExit(1);
-}
-
-send({
-  jsonrpc: "2.0", id: 4, method: "tools/call",
-  params: { name: "deploy_site", arguments: { siteId } },
-});
-
-await waitFor(() => messages.find((m) => m.id === 4), 4000);
 child.kill();
 backend.close();
 
 const tools = messages.find((m) => m.id === 2);
-const deployResult = messages.find((m) => m.id === 4);
+const publishResult = messages.find((m) => m.id === 3);
 
 const expectedTools = [
-  "create_marketing_site", "deploy_site", "authorize_subscription",
+  "publish_site", "authorize_subscription",
   "list_subscriptions", "cancel_subscription", "list_buyer_cards", "forget_card",
 ];
 const gotTools = tools?.result?.tools?.map((t) => t.name).sort();
@@ -156,8 +149,8 @@ const missing = expectedTools.filter((t) => !gotTools?.includes(t));
 if (
   !messages.find((m) => m.id === 1)?.result?.serverInfo
   || missing.length > 0
-  || !createResult?.result?.structuredContent?.siteId
-  || deployResult?.result?.structuredContent?.status !== "payment_required"
+  || publishResult?.result?.structuredContent?.status !== "payment_required"
+  || !publishResult?.result?.structuredContent?.paymentRequestId
 ) {
   console.error("Smoke checks failed.");
   console.error("Missing tools:", missing);
@@ -168,12 +161,6 @@ console.log(`MCP smoke test passed (tools: ${gotTools.join(", ")})`);
 
 function send(message) {
   child.stdin.write(`${JSON.stringify(message)}\n`);
-}
-
-function cleanupAndExit(code) {
-  child.kill();
-  backend.close();
-  process.exit(code);
 }
 
 async function waitFor(predicate, timeoutMs) {
