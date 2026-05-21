@@ -51,6 +51,37 @@
   to     = "/.netlify/functions/merchant"
   status = 200
 
+# VGS Marketing Agency — site storage, public rendering, subscriptions, payment requests.
+[[redirects]]
+  from   = "/s/*"
+  to     = "/.netlify/functions/sites"
+  status = 200
+
+[[redirects]]
+  from   = "/api/sites"
+  to     = "/.netlify/functions/sites"
+  status = 200
+
+[[redirects]]
+  from   = "/api/sites/*"
+  to     = "/.netlify/functions/sites"
+  status = 200
+
+[[redirects]]
+  from   = "/api/subscriptions/*"
+  to     = "/.netlify/functions/subscriptions"
+  status = 200
+
+[[redirects]]
+  from   = "/api/payment-requests"
+  to     = "/.netlify/functions/payment-requests"
+  status = 200
+
+[[redirects]]
+  from   = "/api/payment-requests/*"
+  to     = "/.netlify/functions/payment-requests"
+  status = 200
+
 # Everything else under /api/* maps directly:
 #   /api/token        → /.netlify/functions/token
 #   /api/config       → /.netlify/functions/config

@@ -73,19 +73,21 @@ netlify dev
 
 `netlify dev` serves the Vite frontend and emulates the Functions, so the local environment matches production.
 
-## MCP Agent Demo
+## VGS Marketing Agency — agentic SaaS demo
 
-This repo includes an MCP server (`mcp-server/`) built on `@modelcontextprotocol/sdk`. It exposes a mock sneaker catalog and an agentic purchase tool:
+On top of the Agentic Tokens building blocks, the repo ships a quick-start demo of a fictional dev-tool startup called **VGS Marketing Agency**. It lets any AI agent connected via MCP:
 
-1. the agent searches mock products,
-2. asks the user to approve the exact product and price,
-3. opens the card collection page if the mock buyer has no card,
-4. opens the Visa device-binding page for purchase authentication,
-5. creates the intent and returns a VGS payment cryptogram.
+1. generate a real marketing landing page from a one-line brief,
+2. attempt to deploy it — the server returns `payment_required` ($5/month hosting),
+3. propose the subscription to the user,
+4. on user approval, run the existing VGS device-binding flow (TouchID / FIDO / OTP) and create a recurring intent + cryptogram,
+5. publish the site at `https://<your-site>/s/<siteId>` — a real, browsable URL.
+
+All deployed sites live on the same Netlify project; each new generation per buyer overwrites the previous one (24-hour TTL, no orphan cleanup needed).
 
 Two transports ship together:
 
-- **HTTP** — deployed to Netlify at `/mcp` via `netlify/functions/mcp.js`. Connect a remote MCP client to `https://<your-site>/mcp` — no local install needed.
-- **stdio** — `node mcp-server/src/index.js` for local desktop MCP clients (Claude Desktop, Claude Code, Codex). Auto-opens browser tabs.
+- **HTTP** — deployed at `/mcp` via `netlify/functions/mcp.js`. Connect a remote MCP client to `https://<your-site>/mcp` — no local install.
+- **stdio** — `node mcp-server/src/index.js` for desktop MCP clients (Claude Desktop, Claude Code, Codex). Auto-opens browser tabs at the right moments.
 
-See `mcp-server/README.md` for copy-paste configs and the tool contract.
+See `mcp-server/README.md` for the demo script, the tool contract, and copy-paste configs.

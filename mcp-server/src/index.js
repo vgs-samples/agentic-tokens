@@ -4,7 +4,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createMcpServer, InMemoryPurchaseStore } from "./server.js";
+import { createMcpServer, InMemoryRequestStore } from "./server.js";
 
 const DEFAULT_APP_BASE_URL = "https://localhost:4200";
 
@@ -20,7 +20,7 @@ if (/^https:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/.test(appBaseUrl)) {
 const server = createMcpServer({
   apiBaseUrl,
   appBaseUrl,
-  purchaseStore: new InMemoryPurchaseStore(),
+  requestStore: new InMemoryRequestStore(),
   openBrowser: (url) => openBrowser(url),
   buyerId: process.env.AGENTIC_BUYER_ID,
   consumerEmail: process.env.AGENTIC_CONSUMER_EMAIL,
