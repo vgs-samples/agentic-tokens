@@ -14,7 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { renderMarketingSite, THEME_COLORS } from "./agency.js";
 
-const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.5.2" };
+const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.5.3" };
 
 // Zod schema for the JSON `params` the LLM produces. Matches the shape consumed by
 // renderMarketingSite() in agency.js. Almost everything is optional — defaults in
@@ -116,11 +116,14 @@ When the user asks you to make / build / generate a marketing site, follow this 
 
 1. **Generate a JSON params object** that fits the user's brief. The schema is enforced by render_marketing_site / publish_site. Required top-level keys: brand, themeColor, hero, stats (x4), about, why (6 features), prices (3 tiers), reviews (3 items), imageSeeds. Tailor every text field to the user's theme — company name, tagline, USPs, feature titles, price tiers, fake testimonial text + cities, etc. Pick a themeColor that matches the brand (e.g. emerald for eco, rose for food, sky for tech, amber for warmth). Pick descriptive picsum imageSeeds (e.g. "berry-farm-2024", "mountain-coffee-roastery").
 
-2. Call **render_marketing_site** with that params object. It returns \`siteId\`, \`previewUrl\`, and \`artifactHtml\` — the last one is a single-line <iframe> wrapper pointing at previewUrl.
+2. Call **render_marketing_site** with that params object. It returns \`siteId\`, \`previewUrl\`, and \`artifactHtml\` (a 1-line <iframe> wrapper pointing at previewUrl).
 
-3. **Use the artifacts capability** to create an artifact with type="text/html" whose body is the \`artifactHtml\` string from the tool result, verbatim (5 lines of HTML — keep it as-is). Claude Desktop will render the artifact in its side panel, which loads the full landing page via the embedded iframe.
+3. **Show the preview to the user using whichever inline mechanism your client supports**, in this priority order:
+   a. **You have a Write / file-creation tool (Claude Code, Cursor, similar IDE-style agents)**: write \`artifactHtml\` to a file (e.g. \`/tmp/preview-<siteId>.html\` or \`./preview.html\`). Your client's preview pane will render it automatically. This is the right path for Claude Code — DO NOT skip it just because the tool result mentions "artifact".
+   b. **You have an artifacts capability (Claude Desktop, Claude.ai web)**: create an artifact with type="text/html" whose body is \`artifactHtml\`. Claude opens it in the side panel.
+   c. **Neither is available**: paste \`previewUrl\` as a clickable link.
 
-   DO NOT paste raw HTML into the chat as a code block. DO NOT skip the artifact step — the previewUrl alone is a fallback, not the primary preview. Below the artifact, mention the previewUrl as a clickable fallback link, so the user can open the page in a separate browser tab if they want.
+   "Create an artifact" is a generic instruction — translate it to your client's actual capability (Write+preview, antartifact tag, etc.). DO NOT paste raw HTML into chat as a code block; DO NOT just send the user a URL when Write/artifact is available.
 
 4. **Ask the user explicitly**: "Shall I publish this for $5/month?"
    Wait for their reply. Do not call publish_site without explicit user confirmation.
@@ -320,10 +323,12 @@ async function handleRenderMarketingSite(args, ctx) {
     previewUrl,
     companyName,
     artifactHtml,
-    nextStep: `Site rendered. Now in YOUR response do TWO things, exactly:
-1) Write an artifact (Claude Desktop will render it in the side panel). The artifact body MUST be the artifactHtml string above (a 1-line iframe wrapper). Use the artifacts capability — do NOT just paste HTML in chat as a code block.
-2) Below the artifact, write a short message to the user that includes the previewUrl as a fallback link, e.g. "Превью: ${previewUrl}". Then ask: "Опубликовать за $5/месяц?"
-After the user confirms, call publish_site with the SAME params.`,
+    nextStep: `Show this preview to the user inline, by whichever mechanism your client supports (priority order):
+1) If you have a Write / file-creation tool (Claude Code, Cursor): write artifactHtml to a file like /tmp/preview-${siteId}.html — your client's preview pane will render it automatically.
+2) If you have an artifacts capability (Claude Desktop): create an artifact with type="text/html" and artifactHtml as the body.
+3) Otherwise: include previewUrl as a clickable link.
+
+Do NOT paste raw HTML in chat as a code block. After the user reviews, ask "Опубликовать за $5/мес?" and call publish_site with the SAME params.`,
   };
 }
 
@@ -720,12 +725,21 @@ function formatToolText(name, result) {
 }
 
 function formatRenderSite(result) {
+  // Directive in position 1: the model reads tool results before composing its
+  // reply, so this is where to put environment-aware guidance about how to
+  // surface the preview to the user.
   return [
-    `🎨 **Preview ready** for ${result.companyName ?? "your site"}`,
-    "",
-    `Preview URL: ${result.previewUrl}`,
-    "",
-    `_Now create an artifact (type: \`text/html\`) using the \`artifactHtml\` string from this response — it's a 1-line <iframe> wrapper, the LLM should write it itself. Claude Desktop will render the iframe in its artifact panel. Also share the previewUrl above as a clickable fallback. After the user reviews the page, ask "Shall I publish this for $5/month?" and call publish_site with the same params._`,
+    `🎨 Site rendered for **${result.companyName ?? "your site"}** — siteId \`${result.siteId}\``,
+    ``,
+    `**To show this preview to the user, pick the path that matches your environment (in priority order):**`,
+    ``,
+    `1. **Claude Code / Cursor / IDE-style clients with a Write tool**: write the \`artifactHtml\` string to a file in your workspace (e.g. \`/tmp/preview-${result.siteId}.html\` or \`./preview.html\`), then briefly mention the file path. The client's preview pane will render it automatically.`,
+    `2. **Claude Desktop / Claude.ai web (artifacts capability)**: create an artifact with type="text/html" whose body is the \`artifactHtml\` string. Claude will open it in the side panel.`,
+    `3. **No Write, no artifacts**: paste \`${result.previewUrl}\` as a clickable link in your reply — the user can open it in a browser tab.`,
+    ``,
+    `Do NOT paste raw HTML into chat as a code block — that's the worst UX. After showing the preview, ask: "Опубликовать за $5/мес?" Wait for explicit yes before calling publish_site.`,
+    ``,
+    `Preview URL (always available as a fallback): ${result.previewUrl}`,
   ].join("\n");
 }
 
