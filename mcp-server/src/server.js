@@ -14,7 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { renderMarketingSite, THEME_COLORS } from "./agency.js";
 
-const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.5.0" };
+const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.5.1" };
 
 // Zod schema for the JSON `params` the LLM produces. Matches the shape consumed by
 // renderMarketingSite() in agency.js. Almost everything is optional — defaults in
@@ -116,9 +116,9 @@ When the user asks you to make / build / generate a marketing site, follow this 
 
 1. **Generate a JSON params object** that fits the user's brief. The schema is enforced by render_marketing_site / publish_site. Required top-level keys: brand, themeColor, hero, stats (x4), about, why (6 features), prices (3 tiers), reviews (3 items), imageSeeds. Tailor every text field to the user's theme — company name, tagline, USPs, feature titles, price tiers, fake testimonial text + cities, etc. Pick a themeColor that matches the brand (e.g. emerald for eco, rose for food, sky for tech, amber for warmth). Pick descriptive picsum imageSeeds (e.g. "berry-farm-2024", "mountain-coffee-roastery").
 
-2. Call **render_marketing_site** with that params object. It returns { previewUrl, artifactHtml, ... }.
+2. Call **render_marketing_site** with that params object. It returns \`structuredContent.html\` — the FULL rendered HTML of the page.
 
-3. **Create an Artifact with type "text/html"** using the \`artifactHtml\` string from the response VERBATIM. It is a tiny <iframe> pointing at previewUrl — keep it exactly as the tool returned it. The artifact panel in Claude Desktop will load the full live page inside that iframe.
+3. **Create an Artifact with type "text/html"** whose content IS that html string, verbatim. Do not wrap it in an iframe; do not transform it; do not write your own HTML around it. Paste the exact \`html\` value from the tool result as the artifact body. Claude Desktop will render the full page locally in its artifact panel — no external URL is involved.
 
 4. **Ask the user explicitly**: "Shall I publish this for $5/month?"
    Wait for their reply. Do not call publish_site without explicit user confirmation.
@@ -185,7 +185,7 @@ export function createMcpServer(options) {
     "render_marketing_site",
     {
       title: "Render a marketing site preview",
-      description: `Render a marketing landing page from a JSON \`params\` object and store it as a preview (TTL 10 min). Returns a previewUrl you should put inside a small HTML Artifact (a single <iframe> pointing at previewUrl) so the user sees the full live site rendered in Claude Desktop's artifact panel.
+      description: `Render a marketing landing page from a JSON \`params\` object and return the FULL HTML string inline. Nothing is stored server-side — the HTML lives only in the tool result. The agent should embed that HTML directly inside a Claude Desktop Artifact (type=text/html) so the user previews the page locally.
 
 Use this BEFORE publish_site. The same params produce identical HTML, so previewing and publishing are deterministically the same page.
 
@@ -293,22 +293,16 @@ async function handleRenderMarketingSite(args, ctx) {
 
   const html = renderMarketingSite(params);
   const companyName = params.brand?.name ?? null;
-  const siteId = createId("site").replace("site_", "s").slice(0, 8);
 
-  // Preview-only: not published. /preview/<siteId> serves the HTML; /s/<siteId> 404s.
-  await apiFetch(ctx, `/sites`, {
-    method: "POST",
-    body: { siteId, html, buyerId: ctx.defaultBuyerId, companyName, status: "preview" },
-  });
-
-  const previewUrl = `${ctx.appBaseUrl}/preview/${siteId}`;
+  // No server-side storage: the rendered HTML is returned inline so the agent
+  // can embed it directly in a Claude Desktop Artifact (type=text/html).
+  // Nothing about the preview round-trips through the server — Claude Desktop
+  // renders the HTML locally inside its artifact pane.
   return {
     status: "preview",
-    siteId,
-    previewUrl,
     companyName,
-    artifactHtml: `<!doctype html><html><body style="margin:0;height:100vh"><iframe src="${previewUrl}" style="width:100%;height:100%;border:0" loading="eager"></iframe></body></html>`,
-    nextStep: `Site rendered. Create an Artifact with type="text/html" using the artifactHtml string from this response (it's a single <iframe> pointing at the preview URL — keep it exactly as-is). Then ask the user "Shall I publish this for $5/month?" Wait for explicit yes before calling publish_site.`,
+    html,
+    nextStep: `Site rendered. Create an Artifact with type="text/html" whose content is the entire \`html\` string from this response (do NOT add an iframe, do NOT modify the HTML — paste it verbatim as the artifact body). Claude Desktop will render it in the artifact panel. After the user reviews it, ask "Shall I publish this for $5/month?" and wait for explicit confirmation before calling publish_site with the SAME params.`,
   };
 }
 
@@ -705,15 +699,16 @@ function formatToolText(name, result) {
 }
 
 function formatRenderSite(result) {
+  // The full HTML is in result.html (structuredContent), but we keep this text
+  // block short so it doesn't bloat the chat. The agent reads structuredContent.html
+  // directly when creating the artifact.
+  const size = result.html ? `${Math.round(result.html.length / 1024)} KB` : "—";
   return [
-    `🎨 **Preview ready** — \`${result.siteId}\``,
+    `🎨 **Preview ready** for ${result.companyName ?? "your site"}`,
     "",
-    "| | |",
-    "|---|---|",
-    `| Company | ${result.companyName ?? "—"} |`,
-    `| Preview URL | ${result.previewUrl} |`,
+    `Rendered HTML is in structuredContent.html (${size}). Create an Artifact (type: \`text/html\`) using that exact string as the artifact body — Claude Desktop will render it in the artifact panel.`,
     "",
-    "_Create an Artifact (type: `text/html`) using the `artifactHtml` string from this response — it's a single <iframe> pointing at the preview. After the user reviews it, ask them \"Shall I publish this for $5/month?\" and call publish_site with the SAME params._",
+    `_After the user reviews the preview, ask "Shall I publish this for $5/month?" and call publish_site with the SAME params._`,
   ].join("\n");
 }
 
