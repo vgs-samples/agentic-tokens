@@ -116,20 +116,71 @@ await waitFor(() => messages.find((m) => m.id === 1), 2000);
 
 send({ jsonrpc: "2.0", method: "notifications/initialized" });
 send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-const sampleHtml = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Acme Coffee Co</title>
-<script src="https://cdn.tailwindcss.com"></script></head>
-<body class="bg-white p-12">
-  <h1 class="text-5xl font-bold">Acme Coffee Co</h1>
-  <p class="mt-4 text-gray-600">Premium hand-roasted beans, shipped weekly.</p>
-</body></html>`;
+
+const sampleParams = {
+  brand: { emoji: "☕", name: "Acme Coffee Co" },
+  themeColor: "amber",
+  hero: {
+    badge: "Свежая обжарка",
+    headlineLines: ["Премиум кофе", "из лучших регионов —", "в вашу чашку"],
+    tagline: "Single origin, обжарка под заказ, доставка по подписке.",
+    primaryCta: "Оформить подписку",
+    secondaryCta: "Узнать больше",
+    usps: ["Single origin", "Обжарка под заказ", "Бесплатная доставка"],
+  },
+  stats: [
+    { value: "100%", label: "Арабика" },
+    { value: "48 ч", label: "От обжарки до вас" },
+    { value: "300+", label: "Клиентов" },
+    { value: "4.9 ★", label: "Средняя оценка" },
+  ],
+  about: {
+    eyebrow: "О нас",
+    headlineLines: ["Кофе с характером,", "обжаренный с душой"],
+    paragraphs: ["Мы — небольшая обжарочная мастерская."],
+    miniCards: [
+      { icon: "🌱", title: "Single origin", subtitle: "Только лучшие зёрна" },
+      { icon: "🔥", title: "Свежая обжарка", subtitle: "Перед каждой доставкой" },
+    ],
+  },
+  why: {
+    eyebrow: "Почему мы?",
+    headline: "Разница — в каждой чашке",
+    features: [
+      { icon: "🌱", title: "Single origin", body: "..." },
+      { icon: "🔥", title: "Свежая обжарка", body: "..." },
+      { icon: "📦", title: "По подписке", body: "..." },
+      { icon: "💰", title: "Честная цена", body: "..." },
+      { icon: "🎁", title: "Подарок", body: "..." },
+      { icon: "❤️", title: "Поддержка", body: "..." },
+    ],
+  },
+  prices: {
+    eyebrow: "Тарифы",
+    headline: "Выберите свою подписку",
+    subtitle: "—",
+    popularBadge: "ХИТ",
+    tiers: [
+      { icon: "☕", name: "Дегустация", subtitle: "—", price: "500₽", unit: "/мес", bullets: ["250г", "Одно происхождение"], cta: "Выбрать" },
+      { icon: "☕☕", name: "Стандарт", subtitle: "Самый популярный", price: "1 200₽", unit: "/мес", bullets: ["500г", "Два сорта", "Бесплатная доставка"], cta: "Выбрать" },
+      { icon: "☕☕☕", name: "Premium", subtitle: "Для ценителей", price: "2 500₽", unit: "/мес", bullets: ["1 кг", "Эксклюзивные сорта", "Бесплатная доставка"], cta: "Выбрать" },
+    ],
+  },
+  reviews: {
+    eyebrow: "Отзывы",
+    headline: "Что говорят клиенты",
+    items: [
+      { text: "Лучший кофе в моей жизни.", initial: "М", name: "Мария К.", city: "Москва" },
+      { text: "Подписка — это удобно.", initial: "А", name: "Андрей П.", city: "СПб" },
+      { text: "Премиум-класс.", initial: "Е", name: "Елена С.", city: "Казань" },
+    ],
+  },
+  imageSeeds: { hero: "acme-coffee-hero", about: "acme-coffee-about" },
+};
 
 send({
   jsonrpc: "2.0", id: 3, method: "tools/call",
-  params: { name: "publish_site", arguments: {
-    html: sampleHtml,
-    companyName: "Acme Coffee Co",
-  } },
+  params: { name: "publish_site", arguments: { params: sampleParams } },
 });
 
 await waitFor(() => messages.find((m) => m.id === 3), 4000);
@@ -140,7 +191,7 @@ const tools = messages.find((m) => m.id === 2);
 const publishResult = messages.find((m) => m.id === 3);
 
 const expectedTools = [
-  "publish_site", "authorize_subscription",
+  "render_marketing_site", "publish_site", "authorize_subscription",
   "list_subscriptions", "cancel_subscription", "list_buyer_cards", "forget_card",
 ];
 const gotTools = tools?.result?.tools?.map((t) => t.name).sort();

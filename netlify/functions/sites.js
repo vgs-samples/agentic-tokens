@@ -4,19 +4,40 @@ import { json, wrap } from "./_lib.js";
 // Sites store: siteId → { html, buyerId, companyName, status, createdAt, expiresAt }
 //
 // Public entry points:
-//   /s/:siteId                — published site rendering (404 if not found / expired)
-//   /api/sites                — POST to publish a site (MCP-side)
+//   /s/:siteId                — published site (404 if status !== "published")
+//   /preview/:siteId          — preview rendering for in-chat artifact iframes; always
+//                                serves the HTML if it exists regardless of status.
+//                                Does not bypass payment: the customer-facing URL is /s/:id.
+//   /api/sites                — POST to store a site (MCP-side)
 //   /api/sites/:siteId        — GET / PUT / DELETE for management
-//
-// There is no preview/draft on the server: the agent renders the draft as an
-// Artifact in Claude Desktop before publishing. The server only stores already-
-// paid-for, published sites.
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 
 export default wrap(async (req) => {
   const url = new URL(req.url);
   const store = getStore("agentic-sites");
+
+  // Preview rendering: GET /preview/<siteId> — always serves the HTML, used for in-chat
+  // artifact iframes. No 402 check, but also not the public production URL.
+  const previewMatch = url.pathname.match(/^\/preview\/([^/]+)\/?$/);
+  if (previewMatch) {
+    const siteId = previewMatch[1];
+    const site = await readSite(store, siteId);
+    if (!site) return new Response("Site not found", { status: 404 });
+    return new Response(site.html, {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Robots-Tag": "noindex",
+        "Content-Security-Policy":
+          "default-src 'self' 'unsafe-inline' https: data:; " +
+          "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; " +
+          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+          "font-src https://fonts.gstatic.com data:; " +
+          "img-src 'self' https: data:;",
+      },
+    });
+  }
 
   // Published site rendering: GET /s/<siteId>
   const publicMatch = url.pathname.match(/^\/s\/([^/]+)\/?$/);

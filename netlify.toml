@@ -57,6 +57,12 @@
   to     = "/.netlify/functions/sites"
   status = 200
 
+# Preview rendering — used by render_marketing_site as the src of an in-chat iframe.
+[[redirects]]
+  from   = "/preview/*"
+  to     = "/.netlify/functions/sites"
+  status = 200
+
 [[redirects]]
   from   = "/api/sites"
   to     = "/.netlify/functions/sites"

@@ -12,8 +12,96 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { renderMarketingSite, THEME_COLORS } from "./agency.js";
 
-const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.4.1" };
+const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.5.0" };
+
+// Zod schema for the JSON `params` the LLM produces. Matches the shape consumed by
+// renderMarketingSite() in agency.js. Almost everything is optional — defaults in
+// agency.js fill in any field the agent omits, so the LLM only sends what differs.
+const siteParamsSchema = z.object({
+  brand: z.object({
+    emoji: z.string().describe("Single emoji for the brand logo, e.g. '🍓'."),
+    name: z.string().describe("Brand name, e.g. 'СвежаяКлубника'."),
+  }),
+  themeColor: z.enum([...THEME_COLORS]).describe("Tailwind color family used throughout the page. Pick one that fits the brand theme."),
+  language: z.enum(["ru", "en"]).optional().describe("Page language. Defaults to 'ru'."),
+  hero: z.object({
+    badge: z.string().describe("Small pill above the hero headline, e.g. '🌱 Сезон открыт · Сбор каждое утро'."),
+    headlineLines: z.array(z.string()).length(3).describe("Hero h1 split into exactly 3 lines. The middle line is rendered in the theme accent color."),
+    tagline: z.string().describe("One-paragraph hero tagline under the headline."),
+    primaryCta: z.string().describe("Primary CTA button text, e.g. 'Заказать доставку'."),
+    secondaryCta: z.string().describe("Secondary CTA button text, e.g. 'Посмотреть цены'."),
+    usps: z.array(z.string()).length(3).describe("Three short USP markers shown below the CTAs, each prefixed with a green checkmark."),
+  }),
+  stats: z.array(z.object({
+    value: z.string().describe("Stat value, e.g. '100%' or '3 ч'."),
+    label: z.string().describe("Short label under the value."),
+  })).length(4).describe("Four stat cards on the colored band under the hero."),
+  about: z.object({
+    eyebrow: z.string().describe("Tiny uppercase label above the section heading."),
+    headlineLines: z.array(z.string()).length(2).describe("Section heading split into 2 lines."),
+    paragraphs: z.array(z.string()).min(1).max(3).describe("1-3 paragraphs of body copy."),
+    miniCards: z.array(z.object({
+      icon: z.string().describe("Single emoji."),
+      title: z.string(),
+      subtitle: z.string(),
+    })).length(2).describe("Two small accent cards next to the about copy."),
+  }),
+  why: z.object({
+    eyebrow: z.string(),
+    headline: z.string(),
+    features: z.array(z.object({
+      icon: z.string().describe("Single emoji."),
+      title: z.string(),
+      body: z.string(),
+    })).length(6).describe("Exactly six feature cards in a 3-column grid."),
+  }),
+  prices: z.object({
+    eyebrow: z.string(),
+    headline: z.string(),
+    subtitle: z.string(),
+    popularBadge: z.string().describe("Badge text on the middle (highlighted) tier, e.g. 'ХИТ' or 'POPULAR'."),
+    tiers: z.array(z.object({
+      icon: z.string().describe("Emoji or short string."),
+      name: z.string(),
+      subtitle: z.string(),
+      price: z.string().describe("Price string, e.g. '500₽' or '$29'."),
+      unit: z.string().describe("Unit suffix, e.g. '/мес' or '/kg'."),
+      bullets: z.array(z.string()).min(2).max(5),
+      cta: z.string(),
+    })).length(3).describe("Exactly three pricing tiers. The middle one renders highlighted with popularBadge."),
+  }),
+  reviews: z.object({
+    eyebrow: z.string(),
+    headline: z.string(),
+    items: z.array(z.object({
+      text: z.string(),
+      initial: z.string().describe("Single character avatar."),
+      name: z.string(),
+      city: z.string(),
+    })).length(3),
+  }),
+  order: z.object({
+    eyebrow: z.string(),
+    headlineLines: z.array(z.string()).length(2),
+    subtitle: z.string(),
+    quantities: z.array(z.string()).min(2).max(8).describe("Options for the 'what you need' select."),
+    times: z.array(z.string()).length(3).describe("Three time-of-day options."),
+    submitCta: z.string(),
+  }).partial({ eyebrow: true, subtitle: true }).optional(),
+  footer: z.object({
+    tagline: z.string(),
+    phone: z.string(),
+    email: z.string(),
+    location: z.string(),
+    copyright: z.string().optional(),
+  }).optional(),
+  imageSeeds: z.object({
+    hero: z.string().describe("Picsum seed for the hero image. Use a slug that fits the theme, e.g. 'berry-farm-2024'."),
+    about: z.string().describe("Picsum seed for the about-section image."),
+  }),
+});
 
 // Server-level instructions surfaced to the MCP client at initialize time.
 // Clients (Claude Desktop, Cursor, etc.) include this in the model's context
@@ -22,33 +110,35 @@ const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.4.1" };
 // rather than repeating them inside every individual tool description.
 const SERVER_INSTRUCTIONS = `You are using VGS Marketing Agency — a service that builds and hosts marketing landing pages.
 
-When the user asks you to make / build / generate a marketing site (or anything similar), follow this exact workflow:
+The site itself is RENDERED ON THE SERVER from a fixed, polished template. You do NOT write HTML. You only generate a small JSON params object that fills the template — brand name, theme color, copy, prices, etc. The server handles all markup, Tailwind classes, animations, and image URLs.
 
-1. **Generate the full HTML yourself**, in your own response, as a complete document:
-   - <!doctype html> through </html>
-   - Tailwind via CDN: <script src="https://cdn.tailwindcss.com"></script>
-   - Inter font from Google Fonts
-   - Modern, semantic markup (header, hero, sections, footer)
-   - Hero images from picsum.photos with a deterministic seed
-   - No external JS that needs auth, no inline event handlers, no <script> beyond the Tailwind CDN
-   - Tailor the content (company name, tagline, features, CTAs) to the user's brief
+When the user asks you to make / build / generate a marketing site, follow this exact workflow:
 
-2. **Render the HTML as an Artifact with type "text/html"** so the user previews the page live in Claude Desktop's artifact panel BEFORE anything is published.
+1. **Generate a JSON params object** that fits the user's brief. The schema is enforced by render_marketing_site / publish_site. Required top-level keys: brand, themeColor, hero, stats (x4), about, why (6 features), prices (3 tiers), reviews (3 items), imageSeeds. Tailor every text field to the user's theme — company name, tagline, USPs, feature titles, price tiers, fake testimonial text + cities, etc. Pick a themeColor that matches the brand (e.g. emerald for eco, rose for food, sky for tech, amber for warmth). Pick descriptive picsum imageSeeds (e.g. "berry-farm-2024", "mountain-coffee-roastery").
 
-3. **Ask the user explicitly**: "Shall I publish this for $5/month?"
+2. Call **render_marketing_site** with that params object. It returns { previewUrl, artifactHtml, ... }.
+
+3. **Create an Artifact with type "text/html"** using the \`artifactHtml\` string from the response VERBATIM. It is a tiny <iframe> pointing at previewUrl — keep it exactly as the tool returned it. The artifact panel in Claude Desktop will load the full live page inside that iframe.
+
+4. **Ask the user explicitly**: "Shall I publish this for $5/month?"
    Wait for their reply. Do not call publish_site without explicit user confirmation.
 
-4. Once the user confirms, call **publish_site** with the same HTML string you put in the artifact.
+5. Once the user confirms, call **publish_site** with the SAME params object you passed to render_marketing_site.
 
-5. If publish_site returns status="payment_required":
+6. If publish_site returns status="payment_required":
    - Surface the $5/month subscription to the user using the fields in the response
    - Wait for their explicit confirmation
    - Call **authorize_subscription** with the paymentRequestId
-   - If it returns "waiting_for_authentication", surface the binding URL to the user, wait for them to complete it, then call authorize_subscription again with the same paymentRequestId
-   - Once authorize_subscription returns status="completed", call **publish_site AGAIN with the SAME html** — it will publish now
+   - If it returns "waiting_for_authentication", surface the binding URL to the user, wait for them to complete TouchID / passkey, then call authorize_subscription again with the same paymentRequestId
+   - Once authorize_subscription returns status="completed", call **publish_site AGAIN with the SAME params** — it will publish now
 
-Never skip step 2 (the artifact). The artifact IS the user's preview; without it, the user has no way to see what they're about to pay for.
-Never skip step 3 or step 5's confirmation. Subscriptions are a real charge on a real card.`;
+# Anti-patterns — do not do these:
+
+- **Do NOT write raw HTML.** The server renders everything from params. If you find yourself writing <!doctype html> or any HTML tags (other than the artifactHtml iframe wrapper), stop and call render_marketing_site instead.
+- **Do NOT write the params or HTML to a local file.** Pass params directly to the tool as JSON.
+- **Do NOT skip step 3 (the artifact).** The artifact IS how the user previews the page. Without it they can't see what they're about to pay for.
+- **Do NOT skip the confirmation steps.** Subscriptions are a real charge on a real card.
+- **Do NOT call publish_site before render_marketing_site.** The user must preview before paying.`;
 const DEFAULT_WAIT_MS = 5 * 60 * 1000;
 const DEFAULT_POLL_MS = 1500;
 const SUBSCRIPTION_PLAN = "hosting-5usd-monthly";
@@ -92,36 +182,29 @@ export function createMcpServer(options) {
   const server = new McpServer(SERVER_INFO, { instructions: SERVER_INSTRUCTIONS });
 
   server.registerTool(
+    "render_marketing_site",
+    {
+      title: "Render a marketing site preview",
+      description: `Render a marketing landing page from a JSON \`params\` object and store it as a preview (TTL 10 min). Returns a previewUrl you should put inside a small HTML Artifact (a single <iframe> pointing at previewUrl) so the user sees the full live site rendered in Claude Desktop's artifact panel.
+
+Use this BEFORE publish_site. The same params produce identical HTML, so previewing and publishing are deterministically the same page.
+
+Do NOT write raw HTML yourself — generate only the params JSON.`,
+      inputSchema: { params: siteParamsSchema },
+      annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    (args) => wrapToolResult("render_marketing_site", () => handleRenderMarketingSite(args, ctx)),
+  );
+
+  server.registerTool(
     "publish_site",
     {
       title: "Publish a marketing site",
-      description: `Publish an HTML marketing site to a permanent public URL hosted by VGS Marketing Agency. Costs $5/month.
+      description: `Commit a marketing landing page to a permanent public URL (\`/s/<siteId>\`) hosted by VGS Marketing Agency. Costs $5/month.
 
-REQUIRED FLOW — follow exactly, in this order:
-
-1. **Generate the full HTML yourself** as a complete document (<!doctype html> through </html>). Use:
-   - Tailwind CSS via CDN: <script src="https://cdn.tailwindcss.com"></script>
-   - Inter from Google Fonts
-   - Modern semantic markup (header, hero, sections, footer)
-   - Hero images from picsum.photos with a deterministic seed, e.g. https://picsum.photos/seed/<slug>/1600/900
-   - No external JS requiring auth, no inline event handlers
-   - Tailor the content to the user's brief
-
-2. **Render the HTML as an Artifact with type "text/html"** so the user can preview the site live in Claude Desktop's artifact panel BEFORE committing to publish.
-
-3. **Ask the user explicitly**: "Shall I publish this for $5/month?" — wait for their answer.
-
-4. ONLY after the user confirms, call publish_site with the same HTML you put in the artifact.
-
-If the buyer has no active hosting subscription, this tool returns status="payment_required" with a paymentRequestId. In that case:
-   - Surface the $5/month subscription to the user
-   - Call authorize_subscription(paymentRequestId) — triggers the TouchID/passkey flow
-   - After authorize_subscription returns status="completed", call publish_site AGAIN with the SAME html argument to actually publish
-
-Returns the live URL on success.`,
+Pass the SAME \`params\` you previously sent to render_marketing_site (the page the user previewed and approved). If the buyer has no active subscription, this returns status="payment_required" with a paymentRequestId — surface the subscription to the user, call authorize_subscription, then call publish_site AGAIN with the same params.`,
       inputSchema: {
-        html: z.string().describe("Full HTML document (must include <!doctype html>, <html>, <head>, <body>). This is the same HTML you put in the user-facing Artifact."),
-        companyName: z.string().optional().describe("Company / brand name for storage metadata and display."),
+        params: siteParamsSchema,
         buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
       },
       annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -133,7 +216,7 @@ Returns the live URL on success.`,
     "authorize_subscription",
     {
       title: "Authorize hosting subscription",
-      description: "Complete payment for a pending payment request. Reuses the buyer's most recent card on file (or opens a card collection page if none) and triggers device authentication (TouchID / FIDO / OTP) in a browser tab. Once authentication completes, an intent is created with a recurring mandate and a cryptogram is fetched, activating the subscription. After this returns status='completed', call publish_site again with the SAME html you tried to publish before — now it will succeed.",
+      description: "Complete payment for a pending payment request. Reuses the buyer's most recent card on file (or opens a card collection page if none) and triggers device authentication (TouchID / FIDO / OTP) in a browser tab. Once authentication completes, an intent is created with a recurring mandate and a cryptogram is fetched, activating the subscription. After this returns status='completed', call publish_site again with the SAME params you tried to publish before — now it will succeed.",
       inputSchema: {
         paymentRequestId: z.string().describe("Returned by publish_site when payment_required."),
         cardId: z.string().optional().describe("Explicit cardId to charge — pick from list_buyer_cards if there are multiple. Omit to default to the most recent saved card."),
@@ -204,14 +287,38 @@ Returns the live URL on success.`,
 
 // --- Tool handlers ---
 
+async function handleRenderMarketingSite(args, ctx) {
+  const params = args.params;
+  if (!params) throw new Error("params argument is required");
+
+  const html = renderMarketingSite(params);
+  const companyName = params.brand?.name ?? null;
+  const siteId = createId("site").replace("site_", "s").slice(0, 8);
+
+  // Preview-only: not published. /preview/<siteId> serves the HTML; /s/<siteId> 404s.
+  await apiFetch(ctx, `/sites`, {
+    method: "POST",
+    body: { siteId, html, buyerId: ctx.defaultBuyerId, companyName, status: "preview" },
+  });
+
+  const previewUrl = `${ctx.appBaseUrl}/preview/${siteId}`;
+  return {
+    status: "preview",
+    siteId,
+    previewUrl,
+    companyName,
+    artifactHtml: `<!doctype html><html><body style="margin:0;height:100vh"><iframe src="${previewUrl}" style="width:100%;height:100%;border:0" loading="eager"></iframe></body></html>`,
+    nextStep: `Site rendered. Create an Artifact with type="text/html" using the artifactHtml string from this response (it's a single <iframe> pointing at the preview URL — keep it exactly as-is). Then ask the user "Shall I publish this for $5/month?" Wait for explicit yes before calling publish_site.`,
+  };
+}
+
 async function handlePublishSite(args, ctx) {
   const buyerId = args.buyerId || ctx.defaultBuyerId;
-  const html = args.html;
-  const companyName = args.companyName ?? null;
+  const params = args.params;
+  if (!params) throw new Error("params argument is required");
 
-  if (typeof html !== "string" || html.length < 50) {
-    throw new Error("html argument is required and must be a full HTML document. Generate the HTML yourself, render it as an Artifact for the user to preview, and then pass the same HTML here.");
-  }
+  const html = renderMarketingSite(params);
+  const companyName = params.brand?.name ?? null;
 
   const subscription = await getActiveSubscription(ctx, buyerId);
   if (subscription) {
@@ -230,10 +337,8 @@ async function handlePublishSite(args, ctx) {
     };
   }
 
-  // No active subscription — issue a payment request. We do NOT store the HTML
-  // server-side at this stage; the agent retains it in conversation context
-  // (inside the Artifact it created) and re-sends it after authorize_subscription
-  // completes.
+  // No active subscription — issue a payment request. The agent retains `params`
+  // in conversation context and re-sends them after authorize_subscription completes.
   const paymentRequestId = createId("pr").replace("pr_", "pr").slice(0, 10);
   await apiFetch(ctx, `/payment-requests`, {
     method: "POST",
@@ -254,7 +359,7 @@ async function handlePublishSite(args, ctx) {
     currency: SUBSCRIPTION_CURRENCY,
     plan: SUBSCRIPTION_PLAN,
     description: `Monthly hosting subscription with VGS Marketing Agency — $${SUBSCRIPTION_AMOUNT} / month`,
-    nextStep: `Ask the user to authorize a $${SUBSCRIPTION_AMOUNT}/month hosting subscription. After they confirm, call authorize_subscription with paymentRequestId="${paymentRequestId}". When that returns status=completed, call publish_site AGAIN with the SAME html — now it will publish.`,
+    nextStep: `Ask the user to authorize a $${SUBSCRIPTION_AMOUNT}/month hosting subscription. After they confirm, call authorize_subscription with paymentRequestId="${paymentRequestId}". When that returns status=completed, call publish_site AGAIN with the SAME params — now it will publish.`,
   };
 }
 
@@ -416,7 +521,7 @@ async function handleAuthorizeSubscription(args, ctx) {
     intentId,
     cryptogramId: cryptogram.data.id,
     paymentCredential,
-    nextStep: "Subscription active. Call publish_site AGAIN with the SAME html you previously tried to publish — it will succeed now.",
+    nextStep: "Subscription active. Call publish_site AGAIN with the SAME params you previously tried to publish — it will succeed now.",
   };
 }
 
@@ -589,6 +694,7 @@ async function wrapToolResult(name, fn) {
 }
 
 function formatToolText(name, result) {
+  if (name === "render_marketing_site") return formatRenderSite(result);
   if (name === "publish_site") return formatPublishSite(result);
   if (name === "authorize_subscription") return formatAuthorizeSubscription(result);
   if (name === "list_subscriptions") return formatListSubscriptions(result);
@@ -596,6 +702,19 @@ function formatToolText(name, result) {
   if (name === "list_buyer_cards") return formatBuyerCards(result);
   if (name === "forget_card") return formatForgetCard(result);
   return JSON.stringify(result);
+}
+
+function formatRenderSite(result) {
+  return [
+    `🎨 **Preview ready** — \`${result.siteId}\``,
+    "",
+    "| | |",
+    "|---|---|",
+    `| Company | ${result.companyName ?? "—"} |`,
+    `| Preview URL | ${result.previewUrl} |`,
+    "",
+    "_Create an Artifact (type: `text/html`) using the `artifactHtml` string from this response — it's a single <iframe> pointing at the preview. After the user reviews it, ask them \"Shall I publish this for $5/month?\" and call publish_site with the SAME params._",
+  ].join("\n");
 }
 
 function formatPublishSite(result) {
