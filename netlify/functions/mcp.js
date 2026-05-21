@@ -1,19 +1,19 @@
 // Remote MCP endpoint — Streamable HTTP transport in stateless mode.
 //
-// Each request is a fresh function invocation, so we cannot keep purchase
-// state in process memory. We persist it in Netlify Blobs and pin the
-// MCP server to non-blocking mode (the agent re-invokes the tool to advance
-// state instead of holding open a 5-minute browser wait).
+// Each request is a fresh function invocation, so we cannot keep mid-flow
+// authorization state in process memory. We persist it in Netlify Blobs and
+// pin the MCP server to non-blocking mode (the agent re-invokes the tool to
+// advance state instead of holding open a 5-minute browser wait).
 
 import { getStore } from "@netlify/blobs";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createMcpServer } from "../../mcp-server/src/server.js";
 
-const PURCHASE_TTL_MS = 30 * 60 * 1000;
+const REQUEST_TTL_MS = 30 * 60 * 1000;
 
-class BlobsPurchaseStore {
+class BlobsRequestStore {
   constructor() {
-    this.store = getStore("agentic-purchases");
+    this.store = getStore("agentic-mcp-flow-state");
   }
   async get(id) {
     const value = await this.store.get(id, { type: "json" });
@@ -25,7 +25,7 @@ class BlobsPurchaseStore {
     return value;
   }
   async set(id, value) {
-    await this.store.setJSON(id, { ...value, expiresAt: Date.now() + PURCHASE_TTL_MS });
+    await this.store.setJSON(id, { ...value, expiresAt: Date.now() + REQUEST_TTL_MS });
   }
   async delete(id) {
     await this.store.delete(id);
@@ -41,7 +41,7 @@ export default async (req) => {
   const server = createMcpServer({
     apiBaseUrl,
     appBaseUrl,
-    purchaseStore: new BlobsPurchaseStore(),
+    requestStore: new BlobsRequestStore(),
     openBrowser: () => false, // no display on the server; agent surfaces the URL
     waitForBrowser: false,    // serverless can't wait minutes — the agent polls by re-calling
   });
@@ -56,7 +56,6 @@ export default async (req) => {
   try {
     return await transport.handleRequest(req);
   } finally {
-    // Each request gets a fresh server+transport; release them when done.
     await transport.close();
     await server.close();
   }
