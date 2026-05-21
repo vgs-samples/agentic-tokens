@@ -5,17 +5,36 @@ import { json, wrap } from "./_lib.js";
 //
 // Public entry points:
 //   /s/:siteId                — published site (404 if status !== "published")
+//   /preview/:siteId          — preview rendering (no payment check). Used as the src
+//                                of a tiny iframe wrapper inside a Claude Desktop artifact:
+//                                the artifact body is 5 lines of HTML that the LLM can
+//                                write itself, which is what reliably triggers Claude's
+//                                artifact preview pane.
 //   /api/sites                — POST to store a site (MCP-side)
 //   /api/sites/:siteId        — GET / PUT / DELETE for management
-//
-// There is no /preview/ — the preview lives inside Claude Desktop's artifact
-// panel as self-contained HTML returned by render_marketing_site.
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 
 export default wrap(async (req) => {
   const url = new URL(req.url);
   const store = getStore("agentic-sites");
+
+  // Preview rendering: GET /preview/<siteId> — always serves the HTML if it exists,
+  // ignoring status. The customer-facing URL is /s/:id and that one still does the
+  // payment check.
+  const previewMatch = url.pathname.match(/^\/preview\/([^/]+)\/?$/);
+  if (previewMatch) {
+    const siteId = previewMatch[1];
+    const site = await readSite(store, siteId);
+    if (!site) return new Response("Site not found", { status: 404 });
+    return new Response(site.html, {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Robots-Tag": "noindex",
+      },
+    });
+  }
 
   // Published site rendering: GET /s/<siteId>
   const publicMatch = url.pathname.match(/^\/s\/([^/]+)\/?$/);

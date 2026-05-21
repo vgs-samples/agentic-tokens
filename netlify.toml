@@ -57,6 +57,12 @@
   to     = "/.netlify/functions/sites"
   status = 200
 
+# Preview rendering for in-chat artifact iframes (no 402 check, not the customer URL).
+[[redirects]]
+  from   = "/preview/*"
+  to     = "/.netlify/functions/sites"
+  status = 200
+
 [[redirects]]
   from   = "/api/sites"
   to     = "/.netlify/functions/sites"
