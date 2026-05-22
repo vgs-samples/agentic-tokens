@@ -1,12 +1,22 @@
 import { getStore } from "@netlify/blobs";
 import { json, wrap } from "./_lib.js";
 
-// Subscriptions per buyer.
-// Key: buyerId. Value: { plan, amount, currency, tokenId, intentId, cryptogramId, cardId,
-//                        startedAt, expiresAt, status: "active" | "canceled" }
+// Payment wallet per buyer (blob endpoint name `/api/subscriptions/<buyerId>`
+// kept for backward compatibility — conceptually this stores the buyer's
+// TouchID-bound intent state, not a recurring subscription).
 //
-// Demo-only: a subscription is "active" if expiresAt > now and status === "active".
-// We don't run real renewals — the existing 30-day intent window is enough.
+// Key: buyerId. Value: {
+//   cardId, tokenId, intentId,                // VGS pointers
+//   mandateQuantity, mandateUsed,             // how many $5 cryptograms remain on this intent
+//   intentCreatedAt, intentExpiresAt,         // mandate lifetime
+//   plan, amount, currency,                   // payment metadata
+//   startedAt, updatedAt, lastChargedAt,
+//   status: "active" | "canceled"
+// }
+//
+// POST is upsert + merge — body fields override existing fields, missing fields are preserved.
+// This is required so the MCP server can increment mandateUsed without re-supplying the
+// whole record on every charge.
 
 export default wrap(async (req) => {
   const url = new URL(req.url);
@@ -28,21 +38,17 @@ export default wrap(async (req) => {
 
   if (req.method === "POST" && buyerId) {
     const body = await req.json().catch(() => ({}));
+    const existing = (await store.get(buyerId, { type: "json" })) ?? {};
     const record = {
+      ...existing,
+      ...body,
       buyerId,
-      plan: body.plan ?? "hosting-5usd-monthly",
-      amount: body.amount ?? 5,
-      currency: body.currency ?? "USD",
-      cardId: body.cardId ?? null,
-      tokenId: body.tokenId ?? null,
-      intentId: body.intentId ?? null,
-      cryptogramId: body.cryptogramId ?? null,
-      startedAt: Date.now(),
-      expiresAt: body.expiresAt ?? Date.now() + 30 * 24 * 60 * 60 * 1000,
-      status: "active",
+      startedAt: existing.startedAt ?? Date.now(),
+      updatedAt: Date.now(),
+      status: body.status ?? existing.status ?? "active",
     };
     await store.setJSON(buyerId, record);
-    return json(200, { buyerId, subscription: { ...record, active: true } });
+    return json(200, { buyerId, subscription: { ...record, active: record.status === "active" } });
   }
 
   if (req.method === "DELETE" && buyerId) {
