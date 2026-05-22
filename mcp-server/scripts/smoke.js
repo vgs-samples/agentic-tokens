@@ -1,5 +1,5 @@
 // Stdio smoke test against a mock backend so the test runs without docker / Netlify.
-// We spawn the stdio MCP entry point with a fake VGS Marketing Agency API base URL,
+// We spawn the stdio MCP entry point with a fake Vellum API base URL,
 // intercept its outbound calls via a tiny in-process HTTP server, and check that the
 // new tool surface behaves end-to-end through the protocol handshake.
 

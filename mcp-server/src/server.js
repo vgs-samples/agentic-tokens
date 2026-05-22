@@ -1,6 +1,6 @@
-// Shared MCP server factory — VGS Marketing Agency.
+// Shared MCP server factory — Vellum.
 //
-// VGS Marketing Agency is a (fictional) startup that lets AI agents spin up,
+// Vellum is a (fictional) startup that lets AI agents spin up,
 // host, and bill for marketing landing pages on behalf of their user. This
 // server exposes the agency's tool surface to any MCP client. The
 // VGS Agentic Tokens stack underneath does the actual subscription payment
@@ -18,7 +18,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { renderMarketingSite, THEME_COLORS } from "./agency.js";
 
-const SERVER_INFO = { name: "vgs-marketing-agency", version: "0.6.0" };
+const SERVER_INFO = { name: "vellum", version: "0.6.0" };
 
 // Zod schema for the JSON `params` the LLM produces. Matches the shape consumed by
 // renderMarketingSite() in agency.js. Almost everything is optional — defaults in
@@ -112,7 +112,7 @@ const siteParamsSchema = z.object({
 // whenever any tool from this server is referenced, so this is the right
 // place to mandate cross-tool workflow rules (artifact-first, payment auth)
 // rather than repeating them inside every individual tool description.
-const SERVER_INSTRUCTIONS = `You are using VGS Marketing Agency — a service that builds and hosts marketing landing pages.
+const SERVER_INSTRUCTIONS = `You are using Vellum — a service that builds and hosts marketing landing pages.
 
 The site itself is RENDERED ON THE SERVER from a fixed, polished template. You do NOT write HTML. You only generate a small JSON params object that fills the template — brand name, theme color, copy, prices, etc. The server handles all markup, Tailwind classes, animations, and image URLs.
 
@@ -213,7 +213,7 @@ Do NOT write raw HTML yourself — generate only the params JSON.`,
     "publish_site",
     {
       title: "Publish a marketing site",
-      description: `Commit a marketing landing page to a permanent public URL (\`/s/<siteId>\`) hosted by VGS Marketing Agency. Costs $5/month.
+      description: `Commit a marketing landing page to a permanent public URL (\`/s/<siteId>\`) hosted by Vellum. Costs $5/month.
 
 Pass the SAME \`params\` you previously sent to render_marketing_site (the page the user previewed and approved). If the buyer has no active subscription, this returns status="payment_required" with a paymentRequestId — surface the subscription to the user, call authorize_subscription, then call publish_site AGAIN with the same params.`,
       inputSchema: {
@@ -246,7 +246,7 @@ Pass the SAME \`params\` you previously sent to render_marketing_site (the page 
     "list_subscriptions",
     {
       title: "List active subscriptions",
-      description: "Show whether the buyer currently has an active hosting subscription with VGS Marketing Agency.",
+      description: "Show whether the buyer currently has an active hosting subscription with Vellum.",
       inputSchema: {
         buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
       },
@@ -311,7 +311,7 @@ async function handleRenderMarketingSite(args, ctx) {
   if (ctx.localPreview) {
     // Local mode (stdio): write HTML to disk and open in the user's default
     // browser via openBrowser(). No round-trip through Netlify for preview.
-    const localDir = joinPath(tmpdir(), "vgs-marketing-agency");
+    const localDir = joinPath(tmpdir(), "vellum");
     await mkdir(localDir, { recursive: true });
     const localPath = joinPath(localDir, `${siteId}.html`);
     await writeFile(localPath, html);
@@ -401,7 +401,7 @@ async function handlePublishSite(args, ctx) {
     amount: SUBSCRIPTION_AMOUNT,
     currency: SUBSCRIPTION_CURRENCY,
     plan: SUBSCRIPTION_PLAN,
-    description: `Monthly hosting subscription with VGS Marketing Agency — $${SUBSCRIPTION_AMOUNT} / month`,
+    description: `Monthly hosting subscription with Vellum — $${SUBSCRIPTION_AMOUNT} / month`,
     nextStep: `Ask the user to authorize a $${SUBSCRIPTION_AMOUNT}/month hosting subscription. After they confirm, call authorize_subscription with paymentRequestId="${paymentRequestId}". When that returns status=completed, call publish_site AGAIN with the SAME params — now it will publish.`,
   };
 }
@@ -500,7 +500,7 @@ async function handleAuthorizeSubscription(args, ctx) {
       buyer_id: buyerId,
       tokenId,
       product_name: `${SUBSCRIPTION_PLAN}`,
-      merchant_name: "VGS Marketing Agency",
+      merchant_name: "Vellum",
       amount: formatAmount(pr.amount),
       currency: pr.currency,
       currency_code: currencyNumericCode(pr.currency),
@@ -630,12 +630,12 @@ async function createSubscriptionIntent(ctx, tokenId, assuranceData, paymentRequ
       data: {
         type: "intents",
         attributes: {
-          consumer_prompt: `Authorize VGS Marketing Agency hosting subscription — $${paymentRequest.amount}/month, recurring monthly`,
+          consumer_prompt: `Authorize Vellum hosting subscription — $${paymentRequest.amount}/month, recurring monthly`,
           assurance_data: assuranceData,
           mandates: [{
-            description: `Monthly hosting — VGS Marketing Agency`,
+            description: `Monthly hosting — Vellum`,
             merchant_category: "Web hosting",
-            preferred_merchant_name: "VGS Marketing Agency",
+            preferred_merchant_name: "Vellum",
             merchant_category_code: "4816",
             decline_threshold: {
               amount: paymentRequest.amount,
@@ -663,8 +663,8 @@ async function getCryptogram(ctx, tokenId, intentId, paymentRequest) {
               transaction_amount: formatAmount(paymentRequest.amount),
               transaction_currency_code: paymentRequest.currency,
             },
-            merchant_url: "https://vgs-marketing-agency.example",
-            merchant_name: "VGS Marketing Agency",
+            merchant_url: "https://vellum.example",
+            merchant_name: "Vellum",
           }],
         },
       },
@@ -884,7 +884,7 @@ function normalizeBrand(brand) {
 // --- Utils ---
 
 function log(message) {
-  process.stderr.write(`[vgs-marketing-agency] ${message}\n`);
+  process.stderr.write(`[vellum] ${message}\n`);
 }
 
 function formatAmount(amount) {

@@ -73,9 +73,9 @@ netlify dev
 
 `netlify dev` serves the Vite frontend and emulates the Functions, so the local environment matches production.
 
-## VGS Marketing Agency — agentic SaaS demo
+## Vellum — agentic SaaS demo
 
-On top of the Agentic Tokens building blocks, the repo ships a quick-start demo of a fictional dev-tool startup called **VGS Marketing Agency**. It lets any AI agent connected via MCP:
+On top of the Agentic Tokens building blocks, the repo ships a quick-start demo of a fictional dev-tool startup called **Vellum**. It lets any AI agent connected via MCP:
 
 1. **generate a marketing landing page in the chat itself** — Claude writes the HTML, renders it as an Artifact for the user to preview live,
 2. attempt to publish — the server returns `payment_required` ($5/month hosting),

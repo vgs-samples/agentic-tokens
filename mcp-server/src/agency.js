@@ -1,4 +1,4 @@
-// VGS Marketing Agency — site HTML renderer (template-based).
+// Vellum — site HTML renderer (template-based).
 //
 // The LLM never writes raw HTML. It produces a small JSON `params` object;
 // renderMarketingSite() substitutes those values into a fixed, hand-tuned

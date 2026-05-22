@@ -1,4 +1,4 @@
-# VGS Marketing Agency — MCP Server
+# Vellum — MCP Server
 
 Quick-start demo of a fictional startup: an AI agent can spin up a marketing landing page for the user, the agency charges $5/month to host it, and the subscription is authorized via VGS Agentic Tokens (TouchID-bound intent + network cryptogram).
 
@@ -29,7 +29,7 @@ Agent: [Generates full HTML inline; creates an HTML Artifact]
 You:  yes
 
 Agent: [publish_site(html, companyName="Acme Coffee Co")] → payment_required, prXYZ
-       "Hosting needs a $5/month VGS Marketing Agency subscription. Approve?"
+       "Hosting needs a $5/month Vellum subscription. Approve?"
 
 You:  yes
 
@@ -71,7 +71,7 @@ The recurring mandate created on the VGS side has:
 - `decline_threshold: { amount: 5, currency_code: "USD" }`
 - `effective_until: now + 1 year`
 - `quantity: 12` (twelve monthly charges)
-- `preferred_merchant_name: "VGS Marketing Agency"`
+- `preferred_merchant_name: "Vellum"`
 - `merchant_category_code: 4816` (Computer Network Services)
 
 After the first cryptogram, subsequent monthly charges can reuse the same intent without re-binding — the assurance is bound to the user's device for the life of the mandate.
@@ -83,7 +83,7 @@ After the first cryptogram, subsequent monthly charges can reuse the same intent
 ```json
 {
   "mcpServers": {
-    "vgs-marketing-agency": {
+    "vellum": {
       "type": "http",
       "url": "https://vgs-agentic-tokens.netlify.app/mcp"
     }
@@ -96,7 +96,7 @@ If your client doesn't speak Streamable HTTP yet, use the `mcp-remote` shim:
 ```json
 {
   "mcpServers": {
-    "vgs-marketing-agency": {
+    "vellum": {
       "command": "npx",
       "args": ["-y", "mcp-remote", "https://vgs-agentic-tokens.netlify.app/mcp"]
     }
@@ -117,12 +117,12 @@ curl -X POST https://vgs-agentic-tokens.netlify.app/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
 ```
 
-You should get back `serverInfo.name = "vgs-marketing-agency"`.
+You should get back `serverInfo.name = "vellum"`.
 
 ### stdio — local install
 
 ```bash
-claude mcp add vgs-marketing-agency node /absolute/path/to/agentic-tokens/mcp-server/src/index.js
+claude mcp add vellum node /absolute/path/to/agentic-tokens/mcp-server/src/index.js
 ```
 
 Or via `.mcp.json`:
@@ -130,7 +130,7 @@ Or via `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "vgs-marketing-agency": {
+    "vellum": {
       "command": "node",
       "args": ["/absolute/path/to/agentic-tokens/mcp-server/src/index.js"],
       "env": {
