@@ -174,11 +174,11 @@ When the user asks you to make / build / generate a marketing site, follow this 
    - The tool result table also includes \`cryptogramId\`, masked \`paymentCredential\` (dpanMasked, expiry, cryptogramPreview), and \`intentExpiresAt\`. DO NOT reformat, hide, or summarize that table — the user wants to see a brand-new one-time cryptogram for every $5 charge.
    - Finally, call **publish_site AGAIN** with the SAME params AND \`paymentRequestId\` (the one you just authorized). The server validates the charge, publishes the site, and marks that paymentRequestId as redeemed (it cannot be reused).
 
-7. **Final user-facing message after publish_site returns status=published — MUST include the Visa cryptogram id** as proof the issuer approved the charge. Do NOT just say "$5 charged" or "Live: <url>" alone. The required format is roughly:
+7. **Final user-facing message after publish_site returns status=published — keep it SHORT.** The payment proof (amount, card, cryptogram id) was already shown in step 6's "Payment successful" line. The final message just announces the URL:
 
-   > 🚀 Published: <URL> — $5 charged on card ending <last4> via Visa one-time cryptogram \`<cryptogramId>\`.
+   > 🚀 Published: <URL>
 
-   The cryptogram id is in \`result.cryptogramId\`; the DPAN last4 is in \`result.paymentCredential.dpanLast4\`. Use the exact ids from the response — do not invent or summarize them. The cryptogram id is the network's authorization handle for this specific charge; showing it tells the user "Visa actually said yes to this transaction." That is the whole point of the demo.
+   That's the whole message. Do NOT repeat the amount, card last4, or cryptogram id — they're already in the previous turn's payment-success line. Repeating creates noise.
 
 # Anti-patterns — do not do these:
 
@@ -186,7 +186,8 @@ When the user asks you to make / build / generate a marketing site, follow this 
 - **Do NOT echo the params JSON in chat** — not before the tool call, not after, not as a code block, not as a bullet list, not as a "here's what I'm building" summary of every field. One short prose sentence (step 2) is the whole user-visible description. The tool's arguments panel and the artifact preview cover the rest.
 - **Do NOT write the params or HTML to a local file** (other than the artifactHtml iframe wrapper from step 3a). Pass params directly to the tool as JSON.
 - **Do NOT skip step 3 (the artifact).** The artifact IS how the user previews the page. Without it they can't see what they're about to pay for.
-- **Do NOT skip the cryptogram display** at the end of step 6 OR step 7. The user explicitly wants to see that each $5 charge produces a brand-new one-time cryptogram — that's the whole demo. Specifically: your final assistant message after publish_site=published MUST contain the cryptogram id verbatim. A "$5 charged. Live: <url>" message without the cryptogram id is a failure of this workflow.
+- **Do NOT skip the Payment-successful line** at the end of step 6. That single message is the demo's proof — it shows amount, card last4, and cryptogram id. The whole point is making the per-charge cryptogram visible.
+- **Do NOT repeat payment details in the step-7 publish message.** Once Payment-successful was shown, the final "🚀 Published" line is just the URL. Don't restate the amount, card, or cryptogram id — it makes the transcript noisy.
 - **Do NOT batch Vellum tool calls in the same assistant turn.** Especially never \`authorize_payment\` + \`publish_site\` together. They depend on each other; running in parallel triggers retries and double-charges in the trace. One call per turn. Period. (See the "one tool call per turn" rule at the top of these instructions.)
 - **Do NOT pass paymentRequestId on the FIRST publish_site call** of a new site. That parameter is only for the second (post-payment) call. Passing it on the first call will fail.
 - **Do NOT reuse a paymentRequestId across sites.** Each site costs $5 and needs its own paymentRequestId. Reusing one fails with "already redeemed".
@@ -435,7 +436,7 @@ async function handlePublishSite(args, ctx) {
       currency: pr.currency ?? PAYMENT_CURRENCY,
       cryptogramId: pr.cryptogramId ?? null,
       paymentCredential: pr.paymentCredential ?? null,
-      nextStep: `Site is live. Your final assistant message MUST include all three: the live URL, the amount charged ($${pr.amount ?? PAYMENT_AMOUNT}), AND the Visa cryptogram id (\`${pr.cryptogramId ?? "—"}\`) as proof the issuer approved this charge. Suggested format: "🚀 Published: <URL> — $${pr.amount ?? PAYMENT_AMOUNT} charged on card ending ${pr.paymentCredential?.dpanLast4 ?? "—"} via Visa one-time cryptogram \`${pr.cryptogramId ?? "—"}\`."`,
+      nextStep: `Site is live. Your final assistant message must be SHORT — just announce the URL. Suggested format:\n\n🚀 Published: <URL>\n\nThe payment success line was already shown in the previous step — do NOT repeat the amount, card, or cryptogram id here. Keep it to one line with the live URL.`,
     };
   }
 
@@ -525,6 +526,12 @@ async function handleAuthorizePayment(args, ctx) {
 
       const maskedCredential = maskPaymentCredential(paymentCredential);
       const cryptogramId = extractCryptogramId(cryptogram);
+      // Diagnostic: if extraction returned null, surface the raw response
+      // shape so we can spot which path the data actually lives under.
+      const diagnostic = (cryptogramId === null || !maskedCredential?.dpanLast4)
+        ? `Diagnostic — extraction returned null. Cryptogram response shape: ${describeKeyShape(cryptogram).slice(0, 80).join(", ")}`
+        : null;
+      if (diagnostic) log(diagnostic);
       await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, {
         method: "PUT",
         body: {
@@ -535,6 +542,7 @@ async function handleAuthorizePayment(args, ctx) {
           intentId: wallet.intentId,
           cryptogramId,
           paymentCredential: maskedCredential,
+          rawCryptogramShape: diagnostic,
         },
       });
       await ctx.requestStore.delete(paymentRequestId);
@@ -547,6 +555,7 @@ async function handleAuthorizePayment(args, ctx) {
         intentExpiresAt: wallet.intentExpiresAt,
         cryptogramId,
         paymentCredential: maskedCredential,
+        rawCryptogramShape: diagnostic,
         amount: pr.amount ?? PAYMENT_AMOUNT,
         currency: pr.currency ?? PAYMENT_CURRENCY,
         reusedWallet: true,
@@ -684,6 +693,10 @@ async function handleAuthorizePayment(args, ctx) {
 
   const maskedCredential = maskPaymentCredential(paymentCredential);
   const cryptogramId = extractCryptogramId(cryptogram);
+  const diagnostic = (cryptogramId === null || !maskedCredential?.dpanLast4)
+    ? `Diagnostic — extraction returned null. Cryptogram response shape: ${describeKeyShape(cryptogram).slice(0, 80).join(", ")}`
+    : null;
+  if (diagnostic) log(diagnostic);
   await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, {
     method: "PUT",
     body: {
@@ -692,6 +705,7 @@ async function handleAuthorizePayment(args, ctx) {
       cardId, tokenId, intentId,
       cryptogramId,
       paymentCredential: maskedCredential,
+      rawCryptogramShape: diagnostic,
     },
   });
 
@@ -705,6 +719,7 @@ async function handleAuthorizePayment(args, ctx) {
     intentExpiresAt,
     cryptogramId,
     paymentCredential: maskedCredential,
+    rawCryptogramShape: diagnostic,
     amount: pr.amount ?? PAYMENT_AMOUNT,
     currency: pr.currency ?? PAYMENT_CURRENCY,
     reusedWallet: false,
@@ -1067,16 +1082,7 @@ function formatPublishSite(result) {
       "|---|---|",
       `| Site | \`${result.siteId}\` |`,
       `| Live URL | **${result.url}** |`,
-      `| Charged | $${result.amount ?? PAYMENT_AMOUNT} ${result.currency ?? PAYMENT_CURRENCY} |`,
     ];
-    if (result.cryptogramId) lines.push(`| Cryptogram id | \`${result.cryptogramId}\` _(one-time, single-use)_ |`);
-    const cred = result.paymentCredential ?? {};
-    if (cred.dpanMasked) lines.push(`| Visa DPAN | \`${cred.dpanMasked}\` exp ${cred.expiry ?? "—"} |`);
-    if (cred.type || cred.cryptogramPreview) {
-      const typePart = cred.type ? `\`${cred.type}\`` : "—";
-      const valuePart = cred.cryptogramPreview ? ` value \`${cred.cryptogramPreview}\`` : "";
-      lines.push(`| Visa auth | ${typePart}${valuePart} |`);
-    }
     lines.push("", `_${result.nextStep}_`);
     return lines.join("\n");
   }
@@ -1118,6 +1124,9 @@ function formatAuthorizePayment(result) {
     if (result.intentExpiresAt) {
       const dateStr = new Date(result.intentExpiresAt).toISOString().slice(0, 10);
       lines.push(`| Intent valid until | **${dateStr}** ${result.reusedWallet ? "(reused — no TouchID this time)" : "(fresh — created by this TouchID)"} |`);
+    }
+    if (result.rawCryptogramShape) {
+      lines.push("", `> ⚠️ ${result.rawCryptogramShape}`);
     }
     lines.push("", `_${result.nextStep}_`);
     return lines.join("\n");
