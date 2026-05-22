@@ -3,8 +3,8 @@
 // Vellum is a (fictional) startup that lets AI agents spin up,
 // host, and bill for marketing landing pages on behalf of their user. This
 // server exposes the agency's tool surface to any MCP client. The
-// VGS Agentic Tokens stack underneath does the actual subscription payment
-// (TouchID-bound intent + network cryptogram).
+// VGS Agentic Tokens stack underneath does the actual payment ($5 per
+// published site, TouchID-bound intent + per-charge cryptogram).
 //
 // Two transports wrap this factory:
 //   - mcp-server/src/index.js     stdio (local install, auto-opens browser)
@@ -107,6 +107,17 @@ const siteParamsSchema = z.object({
   }),
 });
 
+const DEFAULT_WAIT_MS = 5 * 60 * 1000;
+const DEFAULT_POLL_MS = 1500;
+const PAYMENT_PLAN = "hosting-single-charge";
+const PAYMENT_AMOUNT = 5;
+const PAYMENT_CURRENCY = "USD";
+// One TouchID-bound intent allows MANDATE_QUANTITY individual cryptograms
+// (each cryptogram = one $5 publish). When the buyer hits the limit, a fresh
+// device binding ceremony is required.
+const MANDATE_QUANTITY = 10;
+const INTENT_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
+
 // Server-level instructions surfaced to the MCP client at initialize time.
 // Clients (Claude Desktop, Cursor, etc.) include this in the model's context
 // whenever any tool from this server is referenced, so this is the right
@@ -120,7 +131,7 @@ When the user asks you to make / build / generate a marketing site, follow this 
 
 1. **Generate a JSON params object** that fits the user's brief. The schema is enforced by render_marketing_site / publish_site. Required top-level keys: brand, themeColor, hero, stats (x4), about, why (6 features), prices (3 tiers), reviews (3 items), imageSeeds. Tailor every text field to the user's theme — company name, tagline, USPs, feature titles, price tiers, fake testimonial text + cities, etc. Pick a themeColor that matches the brand (e.g. emerald for eco, rose for food, sky for tech, amber for warmth). Pick descriptive picsum imageSeeds (e.g. "berry-farm-2024", "mountain-coffee-roastery").
 
-2. **Before calling the tool, write exactly ONE short prose sentence** describing the design in human terms. Example: "Drafting a landing page for **Acme Coffee Co** — premium subscription, emerald theme." That single sentence is the ONLY thing the user should see about the params. Do not paste, summarize, enumerate, or otherwise echo the JSON in chat — the artifact preview is the canonical view, and the user does not want to read 200 lines of JSON. Then call **render_marketing_site** with the params object. It returns \`siteId\`, \`previewUrl\`, and \`artifactHtml\` (a 1-line <iframe> wrapper pointing at previewUrl).
+2. **Before calling the tool, write exactly ONE short prose sentence** describing the design in human terms. Example: "Drafting a landing page for **Acme Coffee Co** — premium beans, emerald theme." That single sentence is the ONLY thing the user should see about the params. Do not paste, summarize, enumerate, or otherwise echo the JSON in chat — the artifact preview is the canonical view, and the user does not want to read 200 lines of JSON. Then call **render_marketing_site** with the params object. It returns \`siteId\`, \`previewUrl\`, and \`artifactHtml\` (a 1-line <iframe> wrapper pointing at previewUrl).
 
 3. **Show the preview to the user using whichever inline mechanism your client supports**, in this priority order:
    a. **You have a Write / file-creation tool (Claude Code, Cursor, similar IDE-style agents)**: write \`artifactHtml\` to a file (e.g. \`/tmp/preview-<siteId>.html\` or \`./preview.html\`). Your client's preview pane will render it automatically. This is the right path for Claude Code — DO NOT skip it just because the tool result mentions "artifact".
@@ -129,16 +140,18 @@ When the user asks you to make / build / generate a marketing site, follow this 
 
    "Create an artifact" is a generic instruction — translate it to your client's actual capability (Write+preview, antartifact tag, etc.). DO NOT paste raw HTML into chat as a code block; DO NOT just send the user a URL when Write/artifact is available.
 
-4. **Ask the user explicitly**: "Shall I publish this for $5/month?"
+4. **Ask the user explicitly**: "Shall I publish this for $5?" — every published site is a one-time $5 charge. There is no subscription. The buyer's card is remembered for future publishes, but the charge runs every time.
    Wait for their reply. Do not call publish_site without explicit user confirmation.
 
-5. Once the user confirms, call **publish_site** with the SAME params object you passed to render_marketing_site.
+5. Once the user confirms, call **publish_site** with the SAME params and NO \`paymentRequestId\` (the first call kicks off a fresh payment).
 
-6. If publish_site returns status="payment_required":
-   - **If the response includes a \`savedCard\` field** (a card is already on file): print the exact line from \`nextStep\` — "I see saved card: [BRAND] ****-****-****-1234 MM/YY, it will be used for payment." — and immediately call **authorize_subscription**. Do NOT ask for confirmation; the user previously saved this card, so reusing it is expected.
-   - **If \`savedCard\` is null** (no card on file): surface the $5/month subscription to the user, wait for explicit confirmation, then call **authorize_subscription**.
-   - If authorize_subscription returns "waiting_for_authentication", surface the binding URL to the user, wait for them to complete TouchID / passkey, then call authorize_subscription again with the same paymentRequestId.
-   - Once authorize_subscription returns status="completed", call **publish_site AGAIN with the SAME params** — it will publish now.
+6. publish_site returns status="payment_required" with a fresh \`paymentRequestId\`. It also includes \`savedCard\` (or null) and \`walletReady\` (boolean). Branch:
+   - **\`savedCard\` set AND \`walletReady\` true**: a card is on file AND the TouchID-bound intent has charges remaining. Print the exact line from \`nextStep\` — "I see saved card: ... charging $5 for this site (N charges remaining on this wallet)." — and immediately call **authorize_payment**. NO extra confirmation, NO TouchID prompt — the server reuses the existing intent and issues a brand-new one-time cryptogram for this $5.
+   - **\`savedCard\` set AND \`walletReady\` false**: card on file, but no usable intent (first charge of a new wallet, or previous wallet exhausted/expired). Print the saved-card line; mention that TouchID is required for the first charge of a new wallet. Then call authorize_payment.
+   - **\`savedCard\` null**: no card on file. Ask explicitly "Publish this for $5? (one-time charge, card will be saved for next time)" and wait for yes. Then call authorize_payment.
+   - If authorize_payment returns "waiting_for_card" or "waiting_for_authentication", surface the URL to the user, wait for them to finish in the browser, then call authorize_payment AGAIN with the same paymentRequestId.
+   - When authorize_payment returns status="completed", **show the fresh cryptogram to the user**. The tool result already includes \`cryptogramId\`, masked \`paymentCredential\` (dpanMasked, expiry, cryptogramPreview), and \`chargesRemaining\`. The default formatted table is designed for this — DO NOT reformat, hide, or summarize it. The whole point is that the user sees a brand-new one-time cryptogram for every $5 charge.
+   - Finally, call **publish_site AGAIN** with the SAME params AND \`paymentRequestId\` (the one you just authorized). The server validates the charge, publishes the site, and marks that paymentRequestId as redeemed (it cannot be reused).
 
 # Anti-patterns — do not do these:
 
@@ -146,14 +159,11 @@ When the user asks you to make / build / generate a marketing site, follow this 
 - **Do NOT echo the params JSON in chat** — not before the tool call, not after, not as a code block, not as a bullet list, not as a "here's what I'm building" summary of every field. One short prose sentence (step 2) is the whole user-visible description. The tool's arguments panel and the artifact preview cover the rest.
 - **Do NOT write the params or HTML to a local file** (other than the artifactHtml iframe wrapper from step 3a). Pass params directly to the tool as JSON.
 - **Do NOT skip step 3 (the artifact).** The artifact IS how the user previews the page. Without it they can't see what they're about to pay for.
-- **Do NOT skip the confirmation steps.** Subscriptions are a real charge on a real card.
-- **Do NOT call publish_site before render_marketing_site.** The user must preview before paying.`;
-const DEFAULT_WAIT_MS = 5 * 60 * 1000;
-const DEFAULT_POLL_MS = 1500;
-const SUBSCRIPTION_PLAN = "hosting-5usd-monthly";
-const SUBSCRIPTION_AMOUNT = 5;
-const SUBSCRIPTION_CURRENCY = "USD";
-const SUBSCRIPTION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+- **Do NOT skip the cryptogram display** at the end of step 6. The user explicitly wants to see that each $5 charge produces a brand-new one-time cryptogram — that's the whole demo.
+- **Do NOT pass paymentRequestId on the FIRST publish_site call** of a new site. That parameter is only for the second (post-payment) call. Passing it on the first call will fail.
+- **Do NOT reuse a paymentRequestId across sites.** Each site costs $5 and needs its own paymentRequestId. Reusing one fails with "already redeemed".
+- **Do NOT call publish_site before render_marketing_site.** The user must preview before paying.
+- **Do NOT mention "subscription" or "monthly".** This model is one-time-per-site. The wallet is just an authorization that lets us skip TouchID up to ${MANDATE_QUANTITY} times; it is not a flat-rate plan.`;
 
 export function createMcpServer(options) {
   const {
@@ -213,12 +223,15 @@ Do NOT write raw HTML yourself — generate only the params JSON.`,
     "publish_site",
     {
       title: "Publish a marketing site",
-      description: `Commit a marketing landing page to a permanent public URL (\`/s/<siteId>\`) hosted by Vellum. Costs $5/month.
+      description: `Commit a marketing landing page to a permanent public URL (\`/s/<siteId>\`) hosted by Vellum. Costs $${PAYMENT_AMOUNT} per published site (one-time, not a subscription — every published site is a fresh $${PAYMENT_AMOUNT} charge).
 
-Pass the SAME \`params\` you previously sent to render_marketing_site (the page the user previewed and approved). If the buyer has no active subscription, this returns status="payment_required" with a paymentRequestId — surface the subscription to the user, call authorize_subscription, then call publish_site AGAIN with the same params.`,
+Two-step flow:
+1. **First call** — pass \`params\` only (NO paymentRequestId). Returns status="payment_required" with a fresh \`paymentRequestId\`, plus \`savedCard\` (or null) and \`walletReady\` (whether the existing TouchID-bound intent has charges left). Hand off to authorize_payment.
+2. **Second call** — pass the SAME \`params\` AND the \`paymentRequestId\` from the completed authorize_payment. Publishes the site, returns status="published" with the live URL and the cryptogramId that paid for it. Marks the paymentRequestId as redeemed — it cannot be reused.`,
       inputSchema: {
         params: siteParamsSchema,
         buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
+        paymentRequestId: z.string().optional().describe("Set on the SECOND call (post-payment) to redeem a completed paymentRequestId and publish. Omit on the first call — the server issues a new payment request."),
       },
       annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -226,53 +239,54 @@ Pass the SAME \`params\` you previously sent to render_marketing_site (the page 
   );
 
   server.registerTool(
-    "authorize_subscription",
+    "authorize_payment",
     {
-      title: "Authorize hosting subscription",
-      description: "Complete payment for a pending payment request. Reuses the buyer's most recent card on file (or opens a card collection page if none) and triggers device authentication (TouchID / FIDO / OTP) in a browser tab. Once authentication completes, an intent is created with a recurring mandate and a cryptogram is fetched, activating the subscription. After this returns status='completed', call publish_site again with the SAME params you tried to publish before — now it will succeed.",
+      title: "Authorize a $5 hosting payment",
+      description: `Capture a one-time $${PAYMENT_AMOUNT} hosting charge for a pending payment request. Fast path: if the buyer already has a TouchID-bound intent with charges remaining (the "wallet"), this just issues a fresh one-time cryptogram from VGS — no card collection, no re-authentication. Slow path (first charge of a new wallet): reuses the buyer's saved card if any (or opens a card collection page), triggers device authentication (TouchID / FIDO / OTP) in a browser tab, creates a VGS intent with mandate quantity=${MANDATE_QUANTITY}, then issues the first cryptogram. Either way, returns status='completed' with cryptogramId + masked paymentCredential. After completion, call publish_site again with the SAME params AND paymentRequestId to publish the site.`,
       inputSchema: {
-        paymentRequestId: z.string().describe("Returned by publish_site when payment_required."),
-        cardId: z.string().optional().describe("Explicit cardId to charge — pick from list_buyer_cards if there are multiple. Omit to default to the most recent saved card."),
-        useExistingCard: z.boolean().optional().describe("Set false to force a fresh card collection even when cards exist on file. Defaults to true."),
-        consumerEmail: z.string().optional().describe("Consumer email used for token enrollment and OTP."),
+        paymentRequestId: z.string().describe("Returned by publish_site when status=payment_required."),
+        cardId: z.string().optional().describe("Explicit cardId to charge on slow path — pick from list_buyer_cards if there are multiple. Ignored on fast path (wallet already binds a card)."),
+        useExistingCard: z.boolean().optional().describe("Set false to force a fresh card collection. Also forces the slow path (new wallet, new TouchID). Defaults to true."),
+        forceNewWallet: z.boolean().optional().describe("Set true to bypass the existing wallet and force a fresh TouchID + new intent, even if the current wallet has charges left. Defaults to false."),
+        consumerEmail: z.string().optional().describe("Consumer email used for token enrollment and OTP (slow path only)."),
         waitForBrowser: z.boolean().optional().describe("If true (default in stdio mode), block until the browser steps finish. If false (default in HTTP mode), return waiting state immediately and resume by calling again with the same paymentRequestId."),
       },
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    (args) => wrapToolResult("authorize_subscription", () => handleAuthorizeSubscription(args, ctx)),
+    (args) => wrapToolResult("authorize_payment", () => handleAuthorizePayment(args, ctx)),
   );
 
   server.registerTool(
-    "list_subscriptions",
+    "wallet_status",
     {
-      title: "List active subscriptions",
-      description: "Show whether the buyer currently has an active hosting subscription with Vellum.",
+      title: "Show the buyer's payment wallet",
+      description: `Return the buyer's current payment wallet: cardId, intentId, charges used / remaining out of ${MANDATE_QUANTITY}, and when the TouchID-bound intent expires. Use this when the user asks "how many publishes can I do before re-authenticating".`,
       inputSchema: {
         buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
       },
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
-    (args) => wrapToolResult("list_subscriptions", () => handleListSubscriptions(args, ctx)),
+    (args) => wrapToolResult("wallet_status", () => handleWalletStatus(args, ctx)),
   );
 
   server.registerTool(
-    "cancel_subscription",
+    "clear_wallet",
     {
-      title: "Cancel hosting subscription",
-      description: "Cancel the buyer's active hosting subscription. Existing sites stop being published.",
+      title: "Clear the payment wallet",
+      description: "Forget the buyer's current TouchID-bound intent. The next publish will require a fresh TouchID + new intent. Does NOT cancel the underlying VGS intent on-network; it only removes the local reference so we issue a brand-new one next time.",
       inputSchema: {
         buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
       },
       annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
-    (args) => wrapToolResult("cancel_subscription", () => handleCancelSubscription(args, ctx)),
+    (args) => wrapToolResult("clear_wallet", () => handleClearWallet(args, ctx)),
   );
 
   server.registerTool(
     "list_buyer_cards",
     {
       title: "List saved cards",
-      description: "Return the cards a buyer has on file (last-4 + brand + opaque cardId). Use this when the user asks 'what cards do I have' or when picking which card to authorize a subscription with.",
+      description: "Return the cards a buyer has on file (last-4 + brand + opaque cardId). Use this when the user asks 'what cards do I have' or when picking which card to authorize a payment with.",
       inputSchema: {
         buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
       },
@@ -363,35 +377,52 @@ async function handlePublishSite(args, ctx) {
   const html = renderMarketingSite(params);
   const companyName = params.brand?.name ?? null;
 
-  const subscription = await getActiveSubscription(ctx, buyerId);
-  if (subscription) {
+  // Path A — second call after authorize_payment: agent passes the
+  // paymentRequestId, server validates the charge and publishes.
+  if (args.paymentRequestId) {
+    const pr = await apiFetch(ctx, `/payment-requests/${encodeURIComponent(args.paymentRequestId)}`, { allow404: true });
+    if (!pr) throw new Error(`Unknown or expired paymentRequestId: ${args.paymentRequestId}.`);
+    if (pr.status !== "completed") {
+      throw new Error(`paymentRequestId ${args.paymentRequestId} has status "${pr.status}", not "completed". Call authorize_payment first.`);
+    }
+    if (pr.redeemed) {
+      throw new Error(`paymentRequestId ${args.paymentRequestId} was already redeemed for a previous publish. Each published site costs $${PAYMENT_AMOUNT} — call publish_site again WITHOUT paymentRequestId to start a fresh payment.`);
+    }
     const siteId = createId("site").replace("site_", "s").slice(0, 8);
     await apiFetch(ctx, `/sites`, {
       method: "POST",
       body: { siteId, html, buyerId, companyName, status: "published" },
+    });
+    await apiFetch(ctx, `/payment-requests/${encodeURIComponent(args.paymentRequestId)}`, {
+      method: "PUT",
+      body: { redeemed: true, redeemedAt: Date.now(), siteId },
     });
     return {
       status: "published",
       siteId,
       url: `${ctx.appBaseUrl}/s/${siteId}`,
       companyName,
-      subscription: { plan: subscription.plan, expiresAt: subscription.expiresAt, active: true },
+      paymentRequestId: args.paymentRequestId,
+      amount: pr.amount ?? PAYMENT_AMOUNT,
+      currency: pr.currency ?? PAYMENT_CURRENCY,
+      cryptogramId: pr.cryptogramId ?? null,
+      paymentCredential: pr.paymentCredential ?? null,
       nextStep: "Site is live at the returned url. Share it with the user.",
     };
   }
 
-  // No active subscription — issue a payment request. The agent retains `params`
-  // in conversation context and re-sends them after authorize_subscription completes.
+  // Path B — first call: no paymentRequestId yet. Issue a fresh $5 charge
+  // request. Each published site costs $5; subscriptions no longer apply.
   const paymentRequestId = createId("pr").replace("pr_", "pr").slice(0, 10);
   await apiFetch(ctx, `/payment-requests`, {
     method: "POST",
     body: {
       id: paymentRequestId,
       buyerId,
-      amount: SUBSCRIPTION_AMOUNT,
-      currency: SUBSCRIPTION_CURRENCY,
-      plan: SUBSCRIPTION_PLAN,
-      reason: `Hosting subscription for ${companyName || "marketing site"} — $${SUBSCRIPTION_AMOUNT}/month`,
+      amount: PAYMENT_AMOUNT,
+      currency: PAYMENT_CURRENCY,
+      plan: PAYMENT_PLAN,
+      reason: `Hosting fee for ${companyName || "marketing site"} — $${PAYMENT_AMOUNT}`,
     },
   });
 
@@ -400,32 +431,107 @@ async function handlePublishSite(args, ctx) {
     ? { cardId: savedCards[0].cardId, label: formatCardLabel(savedCards[0]) }
     : null;
 
+  const wallet = await getWalletState(ctx, buyerId);
+  const walletReady = isWalletUsable(wallet);
+  const chargesRemaining = walletReady
+    ? Number(wallet.mandateQuantity ?? MANDATE_QUANTITY) - Number(wallet.mandateUsed ?? 0)
+    : null;
+
+  let nextStep;
+  if (savedCard && walletReady) {
+    nextStep = `Print this exact line and do NOT ask for confirmation (the card is on file AND the TouchID-bound intent is still armed):\n\n"I see saved card: ${savedCard.label}, charging $${PAYMENT_AMOUNT} for this site (${chargesRemaining} charges remaining on this wallet)."\n\nThen call authorize_payment with paymentRequestId="${paymentRequestId}" — it will issue a fresh one-time cryptogram from the existing intent (no TouchID). When it returns status=completed, call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}" to publish.`;
+  } else if (savedCard) {
+    nextStep = `Print this exact line (no extra confirmation needed — the card is on file, but TouchID is required for the first charge of a new wallet):\n\n"I see saved card: ${savedCard.label}, charging $${PAYMENT_AMOUNT} for this site. TouchID required."\n\nThen call authorize_payment with paymentRequestId="${paymentRequestId}". When it returns status=completed, call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}".`;
+  } else {
+    nextStep = `Ask the user explicitly: "Publish this site for $${PAYMENT_AMOUNT}? (one-time charge, card stored for next time)". After they confirm, call authorize_payment with paymentRequestId="${paymentRequestId}". When it returns status=completed, call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}".`;
+  }
+
   return {
     status: "payment_required",
     paymentRequestId,
-    amount: SUBSCRIPTION_AMOUNT,
-    currency: SUBSCRIPTION_CURRENCY,
-    plan: SUBSCRIPTION_PLAN,
-    description: `Monthly hosting subscription with Vellum — $${SUBSCRIPTION_AMOUNT} / month`,
+    amount: PAYMENT_AMOUNT,
+    currency: PAYMENT_CURRENCY,
+    plan: PAYMENT_PLAN,
+    description: `One-time hosting fee — $${PAYMENT_AMOUNT} for ${companyName || "marketing site"}`,
     savedCard,
-    nextStep: savedCard
-      ? `Print this exact line to the user (no extra confirmation needed — the card is already on file):\n\n"I see saved card: ${savedCard.label}, it will be used for payment."\n\nThen immediately call authorize_subscription with paymentRequestId="${paymentRequestId}". When it returns status=completed, call publish_site AGAIN with the SAME params — now it will publish.`
-      : `Ask the user to authorize a $${SUBSCRIPTION_AMOUNT}/month hosting subscription. After they confirm, call authorize_subscription with paymentRequestId="${paymentRequestId}". When that returns status=completed, call publish_site AGAIN with the SAME params — now it will publish.`,
+    walletReady,
+    chargesRemaining,
+    nextStep,
   };
 }
 
-async function handleAuthorizeSubscription(args, ctx) {
+async function handleAuthorizePayment(args, ctx) {
   const paymentRequestId = args.paymentRequestId;
   const pr = await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, { allow404: true });
   if (!pr) throw new Error(`Unknown or expired paymentRequestId: ${paymentRequestId}.`);
   if (pr.status === "completed") {
-    return { status: "completed", paymentRequestId, alreadyActive: true, subscription: pr.subscription };
+    return {
+      status: "completed",
+      paymentRequestId,
+      alreadyAuthorized: true,
+      cardId: pr.cardId ?? null,
+      intentId: pr.intentId ?? null,
+      cryptogramId: pr.cryptogramId ?? null,
+      paymentCredential: pr.paymentCredential ?? null,
+      nextStep: `Charge already captured. Call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
+    };
   }
 
   const buyerId = pr.buyerId || ctx.defaultBuyerId;
   const consumerEmail = args.consumerEmail || ctx.defaultConsumerEmail;
   const waitForBrowser = args.waitForBrowser ?? ctx.defaultWaitForBrowser;
 
+  // --- Fast path: existing wallet still has charges left on the TouchID-bound
+  // intent. Skip collect + binding + intent creation; just request a fresh
+  // one-time cryptogram from VGS for this $5 charge.
+  if (args.forceNewWallet !== true && args.useExistingCard !== false) {
+    const wallet = await getWalletState(ctx, buyerId);
+    if (isWalletUsable(wallet)) {
+      const cryptogram = await getCryptogram(ctx, wallet.tokenId, wallet.intentId, pr);
+      const paymentCredential = cryptogram?.data?.attributes;
+      if (!paymentCredential) throw new Error(`Cryptogram response returned no payment credential: ${JSON.stringify(cryptogram)}`);
+
+      const newUsed = Number(wallet.mandateUsed ?? 0) + 1;
+      const quantity = Number(wallet.mandateQuantity ?? MANDATE_QUANTITY);
+      await saveWalletState(ctx, buyerId, {
+        ...wallet,
+        mandateUsed: newUsed,
+        lastChargedAt: Date.now(),
+      });
+
+      const maskedCredential = maskPaymentCredential(paymentCredential);
+      await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, {
+        method: "PUT",
+        body: {
+          status: "completed",
+          completedAt: Date.now(),
+          cardId: wallet.cardId,
+          tokenId: wallet.tokenId,
+          intentId: wallet.intentId,
+          cryptogramId: cryptogram.data.id,
+          paymentCredential: maskedCredential,
+        },
+      });
+      await ctx.requestStore.delete(paymentRequestId);
+
+      return {
+        status: "completed",
+        paymentRequestId,
+        cardId: wallet.cardId,
+        intentId: wallet.intentId,
+        cryptogramId: cryptogram.data.id,
+        paymentCredential: maskedCredential,
+        amount: pr.amount ?? PAYMENT_AMOUNT,
+        currency: pr.currency ?? PAYMENT_CURRENCY,
+        reusedWallet: true,
+        chargesUsed: newUsed,
+        chargesRemaining: quantity - newUsed,
+        nextStep: `Captured charge ${newUsed} of ${quantity} on this wallet — fresh one-time cryptogram \`${cryptogram.data.id}\` issued (no TouchID needed). Call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
+      };
+    }
+  }
+
+  // --- Slow path: full ceremony (no wallet yet, or wallet exhausted / expired).
   // Local in-flight state — survives between non-blocking calls in stdio mode.
   // In HTTP mode this is held in Blobs by the wrapping function.
   const flow = (await ctx.requestStore.get(paymentRequestId)) ?? {
@@ -468,7 +574,7 @@ async function handleAuthorizeSubscription(args, ctx) {
       flow.status = "waiting_for_card";
       await ctx.requestStore.set(paymentRequestId, flow);
       return waitingResponse("waiting_for_card", paymentRequestId, collect, null,
-        "Open the collect URL, save a card, then call authorize_subscription again.");
+        "Open the collect URL, save a card, then call authorize_payment again.");
     }
     const cardSession = await waitForSession(ctx, sessionId, ctx.waitMs);
     cardId = cardSession.cardId;
@@ -507,7 +613,7 @@ async function handleAuthorizeSubscription(args, ctx) {
       sessionId: bindingSessionId,
       buyer_id: buyerId,
       tokenId,
-      product_name: `${SUBSCRIPTION_PLAN}`,
+      product_name: `${PAYMENT_PLAN}`,
       merchant_name: "Vellum",
       amount: formatAmount(pr.amount),
       currency: pr.currency,
@@ -525,7 +631,7 @@ async function handleAuthorizeSubscription(args, ctx) {
     flow.tokenId = tokenId;
     await ctx.requestStore.set(paymentRequestId, flow);
     return waitingResponse("waiting_for_authentication", paymentRequestId, collect, binding,
-      "Open the binding URL, complete TouchID / passkey authentication, then call authorize_subscription again.");
+      "Open the binding URL, complete TouchID / passkey authentication, then call authorize_payment again.");
   }
 
   if (!assuranceData) {
@@ -535,7 +641,7 @@ async function handleAuthorizeSubscription(args, ctx) {
     flow.assuranceData = assuranceData;
   }
 
-  const intent = await createSubscriptionIntent(ctx, tokenId, assuranceData, pr);
+  const intent = await createPaymentIntent(ctx, tokenId, assuranceData, pr);
   const intentId = intent?.data?.id;
   if (!intentId) throw new Error(`Intent creation returned no id: ${JSON.stringify(intent)}`);
 
@@ -543,22 +649,26 @@ async function handleAuthorizeSubscription(args, ctx) {
   const paymentCredential = cryptogram?.data?.attributes;
   if (!paymentCredential) throw new Error(`Cryptogram response returned no payment credential: ${JSON.stringify(cryptogram)}`);
 
-  const expiresAt = Date.now() + SUBSCRIPTION_DURATION_MS;
-  const subscriptionRecord = await apiFetch(ctx, `/subscriptions/${encodeURIComponent(buyerId)}`, {
-    method: "POST",
-    body: {
-      plan: pr.plan, amount: pr.amount, currency: pr.currency,
-      cardId, tokenId, intentId, cryptogramId: cryptogram.data.id,
-      expiresAt,
-    },
+  const intentExpiresAt = Date.now() + INTENT_DURATION_MS;
+  await saveWalletState(ctx, buyerId, {
+    plan: pr.plan, amount: pr.amount, currency: pr.currency,
+    cardId, tokenId, intentId,
+    mandateQuantity: MANDATE_QUANTITY,
+    mandateUsed: 1,
+    intentCreatedAt: Date.now(),
+    intentExpiresAt,
+    lastChargedAt: Date.now(),
   });
 
+  const maskedCredential = maskPaymentCredential(paymentCredential);
   await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, {
     method: "PUT",
     body: {
       status: "completed",
       completedAt: Date.now(),
-      subscription: subscriptionRecord.subscription,
+      cardId, tokenId, intentId,
+      cryptogramId: cryptogram.data.id,
+      paymentCredential: maskedCredential,
     },
   });
 
@@ -567,25 +677,47 @@ async function handleAuthorizeSubscription(args, ctx) {
   return {
     status: "completed",
     paymentRequestId,
-    subscription: subscriptionRecord.subscription,
     cardId,
     intentId,
     cryptogramId: cryptogram.data.id,
-    paymentCredential,
-    nextStep: "Subscription active. Call publish_site AGAIN with the SAME params you previously tried to publish — it will succeed now.",
+    paymentCredential: maskedCredential,
+    amount: pr.amount ?? PAYMENT_AMOUNT,
+    currency: pr.currency ?? PAYMENT_CURRENCY,
+    reusedWallet: false,
+    chargesUsed: 1,
+    chargesRemaining: MANDATE_QUANTITY - 1,
+    nextStep: `Captured charge 1 of ${MANDATE_QUANTITY} on a fresh TouchID-bound wallet — one-time cryptogram \`${cryptogram.data.id}\` issued. Call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
   };
 }
 
-async function handleListSubscriptions(args, ctx) {
+async function handleWalletStatus(args, ctx) {
   const buyerId = args.buyerId || ctx.defaultBuyerId;
-  const response = await apiFetch(ctx, `/subscriptions/${encodeURIComponent(buyerId)}`, { allow404: true });
-  return { buyerId, subscription: response?.subscription ?? null };
+  const wallet = await getWalletState(ctx, buyerId);
+  if (!wallet || !wallet.intentId) {
+    return { buyerId, wallet: null };
+  }
+  const quantity = Number(wallet.mandateQuantity ?? MANDATE_QUANTITY);
+  const used = Number(wallet.mandateUsed ?? 0);
+  return {
+    buyerId,
+    wallet: {
+      cardId: wallet.cardId,
+      intentId: wallet.intentId,
+      chargesUsed: used,
+      chargesRemaining: Math.max(0, quantity - used),
+      mandateQuantity: quantity,
+      intentCreatedAt: wallet.intentCreatedAt ?? null,
+      intentExpiresAt: wallet.intentExpiresAt ?? null,
+      usable: isWalletUsable(wallet),
+      status: wallet.status ?? "active",
+    },
+  };
 }
 
-async function handleCancelSubscription(args, ctx) {
+async function handleClearWallet(args, ctx) {
   const buyerId = args.buyerId || ctx.defaultBuyerId;
   const response = await apiFetch(ctx, `/subscriptions/${encodeURIComponent(buyerId)}`, { method: "DELETE", allow404: true });
-  return { buyerId, canceled: Boolean(response?.deleted) };
+  return { buyerId, cleared: Boolean(response?.deleted) };
 }
 
 async function handleListBuyerCards(args, ctx) {
@@ -605,12 +737,49 @@ async function handleForgetCard(args, ctx) {
 
 // --- Helpers shared by tools ---
 
-async function getActiveSubscription(ctx, buyerId) {
+// Wallet state per buyer — the persistent record of {cardId, tokenId, intentId, mandateQuantity, mandateUsed}.
+// Stored under /api/subscriptions/<buyerId> (blob endpoint name unchanged for backward compatibility),
+// but conceptually it is the buyer's payment-authorization wallet, not a subscription gate.
+async function getWalletState(ctx, buyerId) {
   const response = await apiFetch(ctx, `/subscriptions/${encodeURIComponent(buyerId)}`, { allow404: true });
-  const sub = response?.subscription;
-  if (!sub) return null;
-  if (sub.active !== true) return null;
-  return sub;
+  return response?.subscription ?? null;
+}
+
+function isWalletUsable(wallet) {
+  if (!wallet) return false;
+  if (wallet.status === "canceled") return false;
+  if (!wallet.tokenId || !wallet.intentId) return false;
+  const used = Number(wallet.mandateUsed ?? 0);
+  const quantity = Number(wallet.mandateQuantity ?? MANDATE_QUANTITY);
+  if (used >= quantity) return false;
+  if (wallet.intentExpiresAt && Date.now() > Number(wallet.intentExpiresAt)) return false;
+  return true;
+}
+
+async function saveWalletState(ctx, buyerId, wallet) {
+  return apiFetch(ctx, `/subscriptions/${encodeURIComponent(buyerId)}`, {
+    method: "POST",
+    body: wallet,
+  });
+}
+
+// Strip sensitive parts of the cryptogram for display in chat. Keeps the
+// last 4 of the DPAN, the expiry, the cryptogram type, and a 4-char excerpt
+// of the cryptogram value so the user can see that each charge produces a
+// different one-time credential.
+function maskPaymentCredential(credential) {
+  if (!credential || typeof credential !== "object") return null;
+  const pan = credential.card_pan ?? credential.dpan ?? credential.pan ?? null;
+  const value = credential.cryptogram_value ?? credential.cryptogram ?? null;
+  return {
+    dpanLast4: pan ? String(pan).replace(/\D/g, "").slice(-4) : null,
+    dpanMasked: pan ? `****-****-****-${String(pan).replace(/\D/g, "").slice(-4)}` : null,
+    expiry: credential.expiry_month && credential.expiry_year
+      ? `${String(credential.expiry_month).padStart(2, "0")}/${String(credential.expiry_year).slice(-2)}`
+      : null,
+    cryptogramPreview: value ? `${String(value).slice(0, 4)}…${String(value).slice(-4)}` : null,
+    type: credential.cryptogram_type ?? credential.type ?? null,
+  };
 }
 
 async function getCardsForBuyer(ctx, buyerId) {
@@ -630,18 +799,18 @@ async function enrollAgenticToken(ctx, cardId, consumerEmail) {
   });
 }
 
-async function createSubscriptionIntent(ctx, tokenId, assuranceData, paymentRequest) {
-  const effectiveUntil = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+async function createPaymentIntent(ctx, tokenId, assuranceData, paymentRequest) {
+  const effectiveUntil = new Date(Date.now() + INTENT_DURATION_MS).toISOString();
   return apiFetch(ctx, `/intents?tokenId=${encodeURIComponent(tokenId)}`, {
     method: "POST",
     body: {
       data: {
         type: "intents",
         attributes: {
-          consumer_prompt: `Authorize Vellum hosting subscription — $${paymentRequest.amount}/month, recurring monthly`,
+          consumer_prompt: `Authorize Vellum hosting — up to ${MANDATE_QUANTITY} site publishes at $${paymentRequest.amount} each`,
           assurance_data: assuranceData,
           mandates: [{
-            description: `Monthly hosting — Vellum`,
+            description: `Per-site hosting fee — Vellum`,
             merchant_category: "Web hosting",
             preferred_merchant_name: "Vellum",
             merchant_category_code: "4816",
@@ -650,7 +819,7 @@ async function createSubscriptionIntent(ctx, tokenId, assuranceData, paymentRequ
               currency_code: paymentRequest.currency,
             },
             effective_until: effectiveUntil,
-            quantity: 12,
+            quantity: MANDATE_QUANTITY,
           }],
         },
       },
@@ -747,9 +916,9 @@ async function wrapToolResult(name, fn) {
 function formatToolText(name, result) {
   if (name === "render_marketing_site") return formatRenderSite(result);
   if (name === "publish_site") return formatPublishSite(result);
-  if (name === "authorize_subscription") return formatAuthorizeSubscription(result);
-  if (name === "list_subscriptions") return formatListSubscriptions(result);
-  if (name === "cancel_subscription") return formatCancelSubscription(result);
+  if (name === "authorize_payment") return formatAuthorizePayment(result);
+  if (name === "wallet_status") return formatWalletStatus(result);
+  if (name === "clear_wallet") return formatClearWallet(result);
   if (name === "list_buyer_cards") return formatBuyerCards(result);
   if (name === "forget_card") return formatForgetCard(result);
   return JSON.stringify(result);
@@ -778,7 +947,7 @@ function formatPublishSite(result) {
   if (result.status === "published") {
     // Live full-page screenshot of the just-published site.
     const screenshot = `https://api.microlink.io/?url=${encodeURIComponent(result.url)}&screenshot=true&meta=false&embed=screenshot.url&viewport.width=1280&viewport.height=800`;
-    return [
+    const lines = [
       `🚀 **Site published**`,
       "",
       `![Live site](${screenshot})`,
@@ -787,20 +956,23 @@ function formatPublishSite(result) {
       "|---|---|",
       `| Site | \`${result.siteId}\` |`,
       `| Live URL | **${result.url}** |`,
-      `| Subscription | _active until ${new Date(result.subscription.expiresAt).toISOString().slice(0, 10)}_ |`,
-      "",
-      `_${result.nextStep}_`,
-    ].join("\n");
+      `| Charged | $${result.amount ?? PAYMENT_AMOUNT} ${result.currency ?? PAYMENT_CURRENCY} |`,
+    ];
+    if (result.cryptogramId) lines.push(`| Cryptogram | \`${result.cryptogramId}\` (one-time, single-use) |`);
+    lines.push("", `_${result.nextStep}_`);
+    return lines.join("\n");
   }
   if (result.status === "payment_required") {
     return [
-      `💳 **Hosting subscription required**`,
+      `💳 **Payment required — $${result.amount} per published site**`,
       "",
       "| | |",
       "|---|---|",
       `| Plan | ${result.plan} |`,
-      `| Amount | **$${result.amount} / month** |`,
+      `| Amount | **$${result.amount} ${result.currency}** (one-time) |`,
       `| Payment request | \`${result.paymentRequestId}\` |`,
+      `| Saved card | ${result.savedCard ? result.savedCard.label : "_none — collection step required_"} |`,
+      `| Wallet | ${result.walletReady ? `armed (${result.chargesRemaining} charges left, no TouchID needed)` : "_fresh TouchID required_"} |`,
       "",
       `_${result.nextStep}_`,
     ].join("\n");
@@ -808,21 +980,27 @@ function formatPublishSite(result) {
   return JSON.stringify(result);
 }
 
-function formatAuthorizeSubscription(result) {
+function formatAuthorizePayment(result) {
   if (result.status === "completed") {
-    return [
-      `✅ **Subscription active**`,
+    const cred = result.paymentCredential ?? {};
+    const lines = [
+      `✅ **Payment captured — $${result.amount ?? PAYMENT_AMOUNT} ${result.currency ?? PAYMENT_CURRENCY}**`,
       "",
       "| | |",
       "|---|---|",
-      `| Plan | ${result.subscription.plan} |`,
-      `| Card | \`${result.cardId}\` |`,
-      `| Intent | \`${result.intentId}\` |`,
-      `| Cryptogram | \`${result.cryptogramId}\` |`,
-      `| Active until | ${new Date(result.subscription.expiresAt).toISOString().slice(0, 10)} |`,
-      "",
-      `_${result.nextStep}_`,
-    ].join("\n");
+      `| Card | \`${result.cardId ?? "—"}\` |`,
+      `| Intent | \`${result.intentId ?? "—"}\` ${result.reusedWallet ? "(reused — same TouchID-bound intent)" : "(fresh — first charge on this wallet)"} |`,
+      `| **Cryptogram** | \`${result.cryptogramId ?? "—"}\` — **one-time, single-use** |`,
+    ];
+    if (cred.dpanMasked) lines.push(`| DPAN | \`${cred.dpanMasked}\` |`);
+    if (cred.expiry) lines.push(`| Expiry | ${cred.expiry} |`);
+    if (cred.cryptogramPreview) lines.push(`| Value | \`${cred.cryptogramPreview}\` _(masked)_ |`);
+    if (cred.type) lines.push(`| Type | ${cred.type} |`);
+    if (typeof result.chargesRemaining === "number") {
+      lines.push(`| Wallet | ${result.chargesUsed} / ${result.chargesUsed + result.chargesRemaining} charges used (${result.chargesRemaining} remaining on this TouchID) |`);
+    }
+    lines.push("", `_${result.nextStep}_`);
+    return lines.join("\n");
   }
   if (result.status === "waiting_for_card" || result.status === "waiting_for_authentication") {
     const url = result.collect?.url || result.binding?.url;
@@ -836,25 +1014,27 @@ function formatAuthorizeSubscription(result) {
   return JSON.stringify(result);
 }
 
-function formatListSubscriptions(result) {
-  if (!result.subscription) return `💳 No active subscription for \`${result.buyerId}\`.`;
-  const sub = result.subscription;
+function formatWalletStatus(result) {
+  if (!result.wallet) return `💳 No payment wallet for \`${result.buyerId}\` — the next publish will require a fresh TouchID.`;
+  const w = result.wallet;
   return [
-    `💳 **Subscription for \`${result.buyerId}\`**`,
+    `💳 **Wallet for \`${result.buyerId}\`**`,
     "",
     "| | |",
     "|---|---|",
-    `| Plan | ${sub.plan} |`,
-    `| Amount | $${sub.amount} ${sub.currency} / month |`,
-    `| Status | ${sub.active ? "active" : "expired/canceled"} |`,
-    `| Expires | ${sub.expiresAt ? new Date(sub.expiresAt).toISOString().slice(0, 10) : "—"} |`,
+    `| Card | \`${w.cardId ?? "—"}\` |`,
+    `| Intent | \`${w.intentId}\` |`,
+    `| Charges used | ${w.chargesUsed} / ${w.mandateQuantity} |`,
+    `| Charges remaining | **${w.chargesRemaining}** |`,
+    `| Status | ${w.usable ? "armed (no TouchID needed for next publish)" : "exhausted/expired — next publish triggers fresh TouchID"} |`,
+    `| Intent expires | ${w.intentExpiresAt ? new Date(w.intentExpiresAt).toISOString().slice(0, 10) : "—"} |`,
   ].join("\n");
 }
 
-function formatCancelSubscription(result) {
-  return result.canceled
-    ? `🗑️ Subscription canceled for \`${result.buyerId}\`.`
-    : `ℹ️ No active subscription for \`${result.buyerId}\`.`;
+function formatClearWallet(result) {
+  return result.cleared
+    ? `🗑️ Wallet cleared for \`${result.buyerId}\` — next publish will trigger a fresh TouchID.`
+    : `ℹ️ No wallet on file for \`${result.buyerId}\`.`;
 }
 
 function formatBuyerCards(result) {

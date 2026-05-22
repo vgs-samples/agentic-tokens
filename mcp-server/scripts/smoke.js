@@ -192,8 +192,8 @@ const tools = messages.find((m) => m.id === 2);
 const publishResult = messages.find((m) => m.id === 3);
 
 const expectedTools = [
-  "render_marketing_site", "publish_site", "authorize_subscription",
-  "list_subscriptions", "cancel_subscription", "list_buyer_cards", "forget_card",
+  "render_marketing_site", "publish_site", "authorize_payment",
+  "wallet_status", "clear_wallet", "list_buyer_cards", "forget_card",
 ];
 const gotTools = tools?.result?.tools?.map((t) => t.name).sort();
 const missing = expectedTools.filter((t) => !gotTools?.includes(t));
