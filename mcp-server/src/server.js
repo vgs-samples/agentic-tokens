@@ -945,12 +945,32 @@ async function waitForSession(ctx, sessionId, timeoutMs) {
   throw new Error(`Timed out waiting for browser session ${sessionId}.`);
 }
 
+// Strip lone UTF-16 surrogates. Some downstream JSON parsers (Netlify
+// Functions runtime, certain VGS endpoints) reject lone surrogates in string
+// fields with "no low surrogate in string" / "no high surrogate" errors.
+// LLM-generated content occasionally produces these — e.g. an emoji whose
+// high surrogate survived intact but the low surrogate got mangled in
+// transport. Replace any orphaned half with U+FFFD (replacement char) so the
+// request body is always valid UTF-16.
+function sanitizeSurrogates(value) {
+  if (typeof value === "string") {
+    return value.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "�");
+  }
+  if (Array.isArray(value)) return value.map(sanitizeSurrogates);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = sanitizeSurrogates(v);
+    return out;
+  }
+  return value;
+}
+
 async function apiFetch(ctx, path, { method = "GET", body, allow404 = false } = {}) {
   const url = `${ctx.apiBaseUrl}${path}`;
   const response = await ctx.fetchImpl(url, {
     method,
     headers: { "Content-Type": "application/json" },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    ...(body ? { body: JSON.stringify(sanitizeSurrogates(body)) } : {}),
   });
   const text = await response.text();
   let data = null;
