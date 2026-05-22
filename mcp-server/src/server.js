@@ -169,13 +169,19 @@ When the user asks you to make / build / generate a marketing site, follow this 
    - When authorize_payment returns status="completed", **show the fresh cryptogram to the user**. The tool result already includes \`cryptogramId\`, masked \`paymentCredential\` (dpanMasked, expiry, cryptogramPreview), and \`intentExpiresAt\` (intent validity). The default formatted table is designed for this — DO NOT reformat, hide, or summarize it. The whole point is that the user sees a brand-new one-time cryptogram for every $5 charge, plus when the underlying intent expires (next TouchID will be on/after that date).
    - Finally, call **publish_site AGAIN** with the SAME params AND \`paymentRequestId\` (the one you just authorized). The server validates the charge, publishes the site, and marks that paymentRequestId as redeemed (it cannot be reused).
 
+7. **Final user-facing message after publish_site returns status=published — MUST include the Visa cryptogram id** as proof the issuer approved the charge. Do NOT just say "$5 charged" or "Live: <url>" alone. The required format is roughly:
+
+   > 🚀 Published: <URL> — $5 charged on card ending <last4> via Visa one-time cryptogram \`<cryptogramId>\`.
+
+   The cryptogram id is in \`result.cryptogramId\`; the DPAN last4 is in \`result.paymentCredential.dpanLast4\`. Use the exact ids from the response — do not invent or summarize them. The cryptogram id is the network's authorization handle for this specific charge; showing it tells the user "Visa actually said yes to this transaction." That is the whole point of the demo.
+
 # Anti-patterns — do not do these:
 
 - **Do NOT write raw HTML.** The server renders everything from params. If you find yourself writing <!doctype html> or any HTML tags (other than the artifactHtml iframe wrapper), stop and call render_marketing_site instead.
 - **Do NOT echo the params JSON in chat** — not before the tool call, not after, not as a code block, not as a bullet list, not as a "here's what I'm building" summary of every field. One short prose sentence (step 2) is the whole user-visible description. The tool's arguments panel and the artifact preview cover the rest.
 - **Do NOT write the params or HTML to a local file** (other than the artifactHtml iframe wrapper from step 3a). Pass params directly to the tool as JSON.
 - **Do NOT skip step 3 (the artifact).** The artifact IS how the user previews the page. Without it they can't see what they're about to pay for.
-- **Do NOT skip the cryptogram display** at the end of step 6. The user explicitly wants to see that each $5 charge produces a brand-new one-time cryptogram — that's the whole demo.
+- **Do NOT skip the cryptogram display** at the end of step 6 OR step 7. The user explicitly wants to see that each $5 charge produces a brand-new one-time cryptogram — that's the whole demo. Specifically: your final assistant message after publish_site=published MUST contain the cryptogram id verbatim. A "$5 charged. Live: <url>" message without the cryptogram id is a failure of this workflow.
 - **Do NOT batch Vellum tool calls in the same assistant turn.** Especially never \`authorize_payment\` + \`publish_site\` together. They depend on each other; running in parallel triggers retries and double-charges in the trace. One call per turn. Period. (See the "one tool call per turn" rule at the top of these instructions.)
 - **Do NOT pass paymentRequestId on the FIRST publish_site call** of a new site. That parameter is only for the second (post-payment) call. Passing it on the first call will fail.
 - **Do NOT reuse a paymentRequestId across sites.** Each site costs $5 and needs its own paymentRequestId. Reusing one fails with "already redeemed".
@@ -424,7 +430,7 @@ async function handlePublishSite(args, ctx) {
       currency: pr.currency ?? PAYMENT_CURRENCY,
       cryptogramId: pr.cryptogramId ?? null,
       paymentCredential: pr.paymentCredential ?? null,
-      nextStep: "Site is live at the returned url. Share it with the user.",
+      nextStep: `Site is live. Your final assistant message MUST include all three: the live URL, the amount charged ($${pr.amount ?? PAYMENT_AMOUNT}), AND the Visa cryptogram id (\`${pr.cryptogramId ?? "—"}\`) as proof the issuer approved this charge. Suggested format: "🚀 Published: <URL> — $${pr.amount ?? PAYMENT_AMOUNT} charged on card ending ${pr.paymentCredential?.dpanLast4 ?? "—"} via Visa one-time cryptogram \`${pr.cryptogramId ?? "—"}\`."`,
     };
   }
 
@@ -1038,7 +1044,14 @@ function formatPublishSite(result) {
       `| Live URL | **${result.url}** |`,
       `| Charged | $${result.amount ?? PAYMENT_AMOUNT} ${result.currency ?? PAYMENT_CURRENCY} |`,
     ];
-    if (result.cryptogramId) lines.push(`| Cryptogram | \`${result.cryptogramId}\` (one-time, single-use) |`);
+    if (result.cryptogramId) lines.push(`| Cryptogram id | \`${result.cryptogramId}\` _(one-time, single-use)_ |`);
+    const cred = result.paymentCredential ?? {};
+    if (cred.dpanMasked) lines.push(`| Visa DPAN | \`${cred.dpanMasked}\` exp ${cred.expiry ?? "—"} |`);
+    if (cred.type || cred.cryptogramPreview) {
+      const typePart = cred.type ? `\`${cred.type}\`` : "—";
+      const valuePart = cred.cryptogramPreview ? ` value \`${cred.cryptogramPreview}\`` : "";
+      lines.push(`| Visa auth | ${typePart}${valuePart} |`);
+    }
     lines.push("", `_${result.nextStep}_`);
     return lines.join("\n");
   }
