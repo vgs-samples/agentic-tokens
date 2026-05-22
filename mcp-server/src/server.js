@@ -127,6 +127,22 @@ const SERVER_INSTRUCTIONS = `You are using Vellum — a service that builds and 
 
 The site itself is RENDERED ON THE SERVER from a fixed, polished template. You do NOT write HTML. You only generate a small JSON params object that fills the template — brand name, theme color, copy, prices, etc. The server handles all markup, Tailwind classes, animations, and image URLs.
 
+## CRITICAL: one tool call per turn
+
+Every Vellum tool call **must be its own assistant turn**. NEVER batch two Vellum tool calls in the same assistant response.
+
+Specifically: \`authorize_payment\` and \`publish_site\` (post-payment) are sequential — the second one depends on the first being fully completed. If you emit both in the same turn, your client will run them in parallel, \`publish_site\` will see a not-yet-completed payment_request, throw an error, and the whole flow will retry messily. The result is 2–3× duplicate tool calls in the user's view, which is ugly and wastes a real $5 charge.
+
+The rule:
+1. Emit ONE tool call.
+2. Wait for the tool result to come back.
+3. Read the result.
+4. Then emit the next tool call (in a new turn).
+
+This applies to every transition: render → publish_site(1) → authorize_payment → publish_site(2).
+
+## Workflow
+
 When the user asks you to make / build / generate a marketing site, follow this exact workflow:
 
 1. **Generate a JSON params object** that fits the user's brief. The schema is enforced by render_marketing_site / publish_site. Required top-level keys: brand, themeColor, hero, stats (x4), about, why (6 features), prices (3 tiers), reviews (3 items), imageSeeds. Tailor every text field to the user's theme — company name, tagline, USPs, feature titles, price tiers, fake testimonial text + cities, etc. Pick a themeColor that matches the brand (e.g. emerald for eco, rose for food, sky for tech, amber for warmth). Pick descriptive picsum imageSeeds (e.g. "berry-farm-2024", "mountain-coffee-roastery").
@@ -160,6 +176,7 @@ When the user asks you to make / build / generate a marketing site, follow this 
 - **Do NOT write the params or HTML to a local file** (other than the artifactHtml iframe wrapper from step 3a). Pass params directly to the tool as JSON.
 - **Do NOT skip step 3 (the artifact).** The artifact IS how the user previews the page. Without it they can't see what they're about to pay for.
 - **Do NOT skip the cryptogram display** at the end of step 6. The user explicitly wants to see that each $5 charge produces a brand-new one-time cryptogram — that's the whole demo.
+- **Do NOT batch Vellum tool calls in the same assistant turn.** Especially never \`authorize_payment\` + \`publish_site\` together. They depend on each other; running in parallel triggers retries and double-charges in the trace. One call per turn. Period. (See the "one tool call per turn" rule at the top of these instructions.)
 - **Do NOT pass paymentRequestId on the FIRST publish_site call** of a new site. That parameter is only for the second (post-payment) call. Passing it on the first call will fail.
 - **Do NOT reuse a paymentRequestId across sites.** Each site costs $5 and needs its own paymentRequestId. Reusing one fails with "already redeemed".
 - **Do NOT call publish_site before render_marketing_site.** The user must preview before paying.
@@ -496,6 +513,7 @@ async function handleAuthorizePayment(args, ctx) {
       });
 
       const maskedCredential = maskPaymentCredential(paymentCredential);
+      const cryptogramId = extractCryptogramId(cryptogram);
       await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, {
         method: "PUT",
         body: {
@@ -504,7 +522,7 @@ async function handleAuthorizePayment(args, ctx) {
           cardId: wallet.cardId,
           tokenId: wallet.tokenId,
           intentId: wallet.intentId,
-          cryptogramId: cryptogram.data.id,
+          cryptogramId,
           paymentCredential: maskedCredential,
         },
       });
@@ -516,12 +534,12 @@ async function handleAuthorizePayment(args, ctx) {
         cardId: wallet.cardId,
         intentId: wallet.intentId,
         intentExpiresAt: wallet.intentExpiresAt,
-        cryptogramId: cryptogram.data.id,
+        cryptogramId,
         paymentCredential: maskedCredential,
         amount: pr.amount ?? PAYMENT_AMOUNT,
         currency: pr.currency ?? PAYMENT_CURRENCY,
         reusedWallet: true,
-        nextStep: `Captured a $${pr.amount ?? PAYMENT_AMOUNT} charge — fresh one-time cryptogram \`${cryptogram.data.id}\` issued on the existing TouchID-bound intent (valid until ${new Date(wallet.intentExpiresAt).toISOString().slice(0, 10)}). Call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
+        nextStep: `Captured a $${pr.amount ?? PAYMENT_AMOUNT} charge — fresh one-time cryptogram \`${cryptogramId}\` issued on the existing TouchID-bound intent (valid until ${new Date(wallet.intentExpiresAt).toISOString().slice(0, 10)}). Call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
       };
     }
   }
@@ -654,13 +672,14 @@ async function handleAuthorizePayment(args, ctx) {
   });
 
   const maskedCredential = maskPaymentCredential(paymentCredential);
+  const cryptogramId = extractCryptogramId(cryptogram);
   await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, {
     method: "PUT",
     body: {
       status: "completed",
       completedAt: Date.now(),
       cardId, tokenId, intentId,
-      cryptogramId: cryptogram.data.id,
+      cryptogramId,
       paymentCredential: maskedCredential,
     },
   });
@@ -673,12 +692,12 @@ async function handleAuthorizePayment(args, ctx) {
     cardId,
     intentId,
     intentExpiresAt,
-    cryptogramId: cryptogram.data.id,
+    cryptogramId,
     paymentCredential: maskedCredential,
     amount: pr.amount ?? PAYMENT_AMOUNT,
     currency: pr.currency ?? PAYMENT_CURRENCY,
     reusedWallet: false,
-    nextStep: `Captured a $${pr.amount ?? PAYMENT_AMOUNT} charge on a fresh TouchID-bound intent (valid until ${new Date(intentExpiresAt).toISOString().slice(0, 10)}) — one-time cryptogram \`${cryptogram.data.id}\` issued. Call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
+    nextStep: `Captured a $${pr.amount ?? PAYMENT_AMOUNT} charge on a fresh TouchID-bound intent (valid until ${new Date(intentExpiresAt).toISOString().slice(0, 10)}) — one-time cryptogram \`${cryptogramId}\` issued. Call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
   };
 }
 
@@ -751,23 +770,90 @@ async function saveWalletState(ctx, buyerId, wallet) {
   });
 }
 
-// Strip sensitive parts of the cryptogram for display in chat. Keeps the
-// last 4 of the DPAN, the expiry, the cryptogram type, and a 4-char excerpt
-// of the cryptogram value so the user can see that each charge produces a
-// different one-time credential.
+// Extract a display-safe slice of the cryptogram response for the user.
+//
+// VGS Agentic Tokens response (cryptogram.data.attributes) shape:
+//   {
+//     intent_id, status,
+//     network_token,            // full DPAN (16 digits)
+//     exp_month, exp_year,      // numbers
+//     last4,                    // string of last 4 of DPAN
+//     cryptogram: {             // ← nested
+//       value, type, id, expires_at
+//     }
+//   }
+//
+// We surface:
+//   - dpan: bullet-masked last4 (safe in markdown — no `*` collisions)
+//   - expiry MM/YY
+//   - cryptogram id (the REAL one, not the intent id)
+//   - cryptogram type (DAVV / TAVV / CAVV)
+//   - cryptogram value preview (short value shown whole; long values masked)
+//   - cryptogram expires_at (how long this one-time credential is valid)
 function maskPaymentCredential(credential) {
   if (!credential || typeof credential !== "object") return null;
-  const pan = credential.card_pan ?? credential.dpan ?? credential.pan ?? null;
-  const value = credential.cryptogram_value ?? credential.cryptogram ?? null;
+  if (process.env.AGENTIC_DEBUG_CRYPTOGRAM === "true") {
+    log(`paymentCredential shape: ${describeKeyShape(credential).join(", ")}`);
+  }
+
+  const last4 = credential.last4
+    ?? (credential.network_token ? String(credential.network_token).replace(/\D/g, "").slice(-4) : null);
+  const month = credential.exp_month ?? credential.expiry_month ?? credential.expiration_month ?? null;
+  const year = credential.exp_year ?? credential.expiry_year ?? credential.expiration_year ?? null;
+
+  // `cryptogram` is normally an object; tolerate flat-string variants too.
+  const cryptoBlob = credential.cryptogram;
+  const cryptogramValue = cryptoBlob && typeof cryptoBlob === "object"
+    ? cryptoBlob.value ?? null
+    : (typeof cryptoBlob === "string" ? cryptoBlob : null);
+  const cryptogramType = cryptoBlob && typeof cryptoBlob === "object"
+    ? cryptoBlob.type ?? null
+    : (credential.cryptogram_type ?? null);
+  const cryptogramId = cryptoBlob && typeof cryptoBlob === "object" ? cryptoBlob.id ?? null : null;
+  const cryptogramExpiresAt = cryptoBlob && typeof cryptoBlob === "object" ? cryptoBlob.expires_at ?? null : null;
+
+  const valueStr = cryptogramValue === null || cryptogramValue === undefined ? null : String(cryptogramValue);
+  // Short sandbox values like "530" — show whole. Long base64 — mask middle.
+  const valuePreview = !valueStr
+    ? null
+    : valueStr.length <= 8
+      ? valueStr
+      : `${valueStr.slice(0, 4)}…${valueStr.slice(-4)}`;
+
   return {
-    dpanLast4: pan ? String(pan).replace(/\D/g, "").slice(-4) : null,
-    dpanMasked: pan ? `****-****-****-${String(pan).replace(/\D/g, "").slice(-4)}` : null,
-    expiry: credential.expiry_month && credential.expiry_year
-      ? `${String(credential.expiry_month).padStart(2, "0")}/${String(credential.expiry_year).slice(-2)}`
+    dpanLast4: last4 ? String(last4) : null,
+    dpanMasked: last4 ? `••••-••••-••••-${last4}` : null,
+    expiry: month && year
+      ? `${String(month).padStart(2, "0")}/${String(year).slice(-2)}`
       : null,
-    cryptogramPreview: value ? `${String(value).slice(0, 4)}…${String(value).slice(-4)}` : null,
-    type: credential.cryptogram_type ?? credential.type ?? null,
+    cryptogramId,
+    cryptogramExpiresAt,
+    cryptogramPreview: valuePreview,
+    type: cryptogramType ? String(cryptogramType) : null,
   };
+}
+
+// VGS returns cryptogram.data.id = INTENT_ID (echo); the real cryptogram id
+// lives at cryptogram.data.attributes.cryptogram.id. Use this helper everywhere
+// instead of reaching into .data.id directly.
+function extractCryptogramId(cryptogramResponse) {
+  return cryptogramResponse?.data?.attributes?.cryptogram?.id
+    ?? cryptogramResponse?.data?.attributes?.id
+    ?? null;
+}
+
+function describeKeyShape(obj, prefix = "", depth = 0, out = []) {
+  if (!obj || typeof obj !== "object" || depth > 4) return out;
+  for (const [key, value] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      out.push(`${path}{}`);
+      describeKeyShape(value, path, depth + 1, out);
+    } else {
+      out.push(`${path}:${Array.isArray(value) ? "array" : typeof value}`);
+    }
+  }
+  return out;
 }
 
 async function getCardsForBuyer(ctx, buyerId) {
@@ -816,7 +902,7 @@ async function createPaymentIntent(ctx, tokenId, assuranceData, paymentRequest) 
 }
 
 async function getCryptogram(ctx, tokenId, intentId, paymentRequest) {
-  return apiFetch(ctx, `/cryptograms?tokenId=${encodeURIComponent(tokenId)}&intentId=${encodeURIComponent(intentId)}`, {
+  const response = await apiFetch(ctx, `/cryptograms?tokenId=${encodeURIComponent(tokenId)}&intentId=${encodeURIComponent(intentId)}`, {
     method: "POST",
     body: {
       data: {
@@ -835,6 +921,12 @@ async function getCryptogram(ctx, tokenId, intentId, paymentRequest) {
       },
     },
   });
+  // Set AGENTIC_DEBUG_CRYPTOGRAM=true to dump the response shape (keys only,
+  // no sensitive values) to stderr so we can refine maskPaymentCredential.
+  if (process.env.AGENTIC_DEBUG_CRYPTOGRAM === "true" && response) {
+    log(`cryptogram response shape: ${describeKeyShape(response).slice(0, 60).join(", ")}`);
+  }
+  return response;
 }
 
 async function waitForSession(ctx, sessionId, timeoutMs) {
@@ -981,9 +1073,10 @@ function formatAuthorizePayment(result) {
       `| **Cryptogram** | \`${result.cryptogramId ?? "—"}\` — **one-time, single-use** |`,
     ];
     if (cred.dpanMasked) lines.push(`| DPAN | \`${cred.dpanMasked}\` |`);
-    if (cred.expiry) lines.push(`| Expiry | ${cred.expiry} |`);
-    if (cred.cryptogramPreview) lines.push(`| Value | \`${cred.cryptogramPreview}\` _(masked)_ |`);
-    if (cred.type) lines.push(`| Type | ${cred.type} |`);
+    if (cred.expiry) lines.push(`| DPAN expiry | ${cred.expiry} |`);
+    if (cred.cryptogramPreview) lines.push(`| Cryptogram value | \`${cred.cryptogramPreview}\` _(masked)_ |`);
+    if (cred.type) lines.push(`| Cryptogram type | ${cred.type} |`);
+    if (cred.cryptogramExpiresAt) lines.push(`| Cryptogram valid until | ${cred.cryptogramExpiresAt} _(this one-time credential)_ |`);
     if (result.intentExpiresAt) {
       const dateStr = new Date(result.intentExpiresAt).toISOString().slice(0, 10);
       lines.push(`| Intent valid until | **${dateStr}** ${result.reusedWallet ? "(reused — no TouchID this time)" : "(fresh — created by this TouchID)"} |`);
