@@ -166,7 +166,12 @@ When the user asks you to make / build / generate a marketing site, follow this 
    - **\`savedCard\` set AND \`walletReady\` false**: card on file, but no usable intent (first charge for this card, or the previous intent already expired). Print the saved-card line; mention that TouchID is required to create a new intent. Then call authorize_payment.
    - **\`savedCard\` null**: no card on file at all. Ask explicitly "Publish this for $5? (one-time charge, card will be saved for next time)" and wait for yes. Then call authorize_payment.
    - If authorize_payment returns "waiting_for_card" or "waiting_for_authentication", surface the URL to the user, wait for them to finish in the browser, then call authorize_payment AGAIN with the same paymentRequestId.
-   - When authorize_payment returns status="completed", **show the fresh cryptogram to the user**. The tool result already includes \`cryptogramId\`, masked \`paymentCredential\` (dpanMasked, expiry, cryptogramPreview), and \`intentExpiresAt\` (intent validity). The default formatted table is designed for this — DO NOT reformat, hide, or summarize it. The whole point is that the user sees a brand-new one-time cryptogram for every $5 charge, plus when the underlying intent expires (next TouchID will be on/after that date).
+   - When authorize_payment returns status="completed", **first print the explicit success line from \`nextStep\`** to the user as its own short message. The format is fixed:
+
+     > ✅ Payment successful — $5 USD charged on card ending <last4> (cryptogram \`<id>\`, ... intent valid until <date>).
+
+     This is the moment where the user must see that money moved. Do NOT skip it. Do NOT merge it into the later "Published" message. Do NOT batch it with publish_site in the same turn — print the success line, end the turn, then in the next turn call publish_site.
+   - The tool result table also includes \`cryptogramId\`, masked \`paymentCredential\` (dpanMasked, expiry, cryptogramPreview), and \`intentExpiresAt\`. DO NOT reformat, hide, or summarize that table — the user wants to see a brand-new one-time cryptogram for every $5 charge.
    - Finally, call **publish_site AGAIN** with the SAME params AND \`paymentRequestId\` (the one you just authorized). The server validates the charge, publishes the site, and marks that paymentRequestId as redeemed (it cannot be reused).
 
 7. **Final user-facing message after publish_site returns status=published — MUST include the Visa cryptogram id** as proof the issuer approved the charge. Do NOT just say "$5 charged" or "Live: <url>" alone. The required format is roughly:
@@ -545,7 +550,7 @@ async function handleAuthorizePayment(args, ctx) {
         amount: pr.amount ?? PAYMENT_AMOUNT,
         currency: pr.currency ?? PAYMENT_CURRENCY,
         reusedWallet: true,
-        nextStep: `Captured a $${pr.amount ?? PAYMENT_AMOUNT} charge — fresh one-time cryptogram \`${cryptogramId}\` issued on the existing TouchID-bound intent (valid until ${new Date(wallet.intentExpiresAt).toISOString().slice(0, 10)}). Call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
+        nextStep: `Before calling publish_site, print this EXACT success line to the user as its own short message:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, fast-path — no TouchID needed, existing intent valid until ${new Date(wallet.intentExpiresAt).toISOString().slice(0, 10)}).\n\nThen — in the NEXT turn, not the same one — call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
       };
     }
   }
@@ -703,7 +708,7 @@ async function handleAuthorizePayment(args, ctx) {
     amount: pr.amount ?? PAYMENT_AMOUNT,
     currency: pr.currency ?? PAYMENT_CURRENCY,
     reusedWallet: false,
-    nextStep: `Captured a $${pr.amount ?? PAYMENT_AMOUNT} charge on a fresh TouchID-bound intent (valid until ${new Date(intentExpiresAt).toISOString().slice(0, 10)}) — one-time cryptogram \`${cryptogramId}\` issued. Call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
+    nextStep: `Before calling publish_site, print this EXACT success line to the user as its own short message:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, first charge on a fresh TouchID-bound intent valid until ${new Date(intentExpiresAt).toISOString().slice(0, 10)}).\n\nThen — in the NEXT turn, not the same one — call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
   };
 }
 
@@ -1171,7 +1176,9 @@ function formatForgetCard(result) {
 
 function formatCardLabel(card) {
   const brand = `[${normalizeBrand(card.brand)}]`;
-  const number = card.lastFour ? `****-****-****-${card.lastFour}` : `…${card.cardId.slice(-4)}`;
+  // Bullet characters survive markdown rendering; asterisks get eaten as bold
+  // markers (e.g. `****-****-****-1569` parses as **bold-empty**`-`**bold-empty**`...` → `--1569`).
+  const number = card.lastFour ? `••••-••••-••••-${card.lastFour}` : `…${card.cardId.slice(-4)}`;
   const exp = card.expMonth && card.expYear
     ? ` ${String(card.expMonth).padStart(2, "0")}/${String(card.expYear).slice(-2)}`
     : "";
