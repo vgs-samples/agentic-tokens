@@ -254,6 +254,8 @@ Do NOT write raw HTML yourself — generate only the params JSON.`,
       title: "Publish a marketing site",
       description: `Commit a marketing landing page to a permanent public URL (\`/s/<siteId>\`) hosted by Vellum. Costs $${PAYMENT_AMOUNT} per published site (one-time, not a subscription — every published site is a fresh $${PAYMENT_AMOUNT} charge).
 
+**CRITICAL — must be the only tool call in your reply.** Never invoke publish_site in parallel with authorize_payment or another publish_site. Wait for this call to return, then decide what to do next in a SUBSEQUENT reply. Batching causes double charges and double payment requests.
+
 Two-step flow:
 1. **First call** — pass \`params\` only (NO paymentRequestId). Returns status="payment_required" with a fresh \`paymentRequestId\`, plus \`savedCard\` (or null) and \`walletReady\` (whether the existing TouchID-bound intent has charges left). Hand off to authorize_payment.
 2. **Second call** — pass the SAME \`params\` AND the \`paymentRequestId\` from the completed authorize_payment. Publishes the site, returns status="published" with the live URL and the cryptogramId that paid for it. Marks the paymentRequestId as redeemed — it cannot be reused.`,
@@ -271,7 +273,11 @@ Two-step flow:
     "authorize_payment",
     {
       title: "Authorize a $5 hosting payment",
-      description: `Capture a one-time $${PAYMENT_AMOUNT} hosting charge for a pending payment request. Fast path: if the buyer already has a TouchID-bound intent that is still within its validity window (the "wallet" — date check, no count), this just issues a fresh one-time cryptogram from VGS — no card collection, no re-authentication. Slow path (no usable intent yet, or previous one expired): reuses the buyer's saved card if any (or opens a card collection page), triggers device authentication (TouchID / FIDO / OTP) in a browser tab, creates a VGS intent valid for ~1 year, then issues the first cryptogram. Either way, returns status='completed' with cryptogramId, masked paymentCredential, and intentExpiresAt. After completion, call publish_site again with the SAME params AND paymentRequestId to publish the site.`,
+      description: `Capture a one-time $${PAYMENT_AMOUNT} hosting charge for a pending payment request.
+
+**CRITICAL — must be the only tool call in your reply.** Never invoke authorize_payment twice in the same reply (parallel calls open the TouchID iframe twice and force the user to authenticate twice). Never invoke it in parallel with publish_site either. Issue ONE call, wait for the result, then continue in your NEXT reply.
+
+Fast path: if the buyer already has a TouchID-bound intent that is still within its validity window (the "wallet" — date check, no count), this just issues a fresh one-time cryptogram from VGS — no card collection, no re-authentication. Slow path (no usable intent yet, or previous one expired): reuses the buyer's saved card if any (or opens a card collection page), triggers device authentication (TouchID / FIDO / OTP) in a browser tab, creates a VGS intent valid for ~1 year, then issues the first cryptogram. Either way, returns status='completed' with cryptogramId, masked paymentCredential, and intentExpiresAt. After completion, call publish_site again with the SAME params AND paymentRequestId to publish the site.`,
       inputSchema: {
         paymentRequestId: z.string().describe("Returned by publish_site when status=payment_required."),
         cardId: z.string().optional().describe("Explicit cardId to charge on slow path — pick from list_buyer_cards if there are multiple. Ignored on fast path (wallet already binds a card)."),
@@ -598,7 +604,10 @@ async function handleAuthorizePayment(args, ctx) {
   }
 
   if (!cardId) {
-    const sessionId = createId("collect");
+    // Deterministic sessionId per paymentRequestId — if the agent calls
+    // authorize_payment twice in parallel for the same PR, both calls produce
+    // the same collect URL → one server-side session → one card form for the user.
+    const sessionId = `collect-${paymentRequestId}`;
     const collectUrl = buildAppUrl(ctx, "/collect.html", { sessionId, buyer_id: buyerId });
     const opened = ctx.openBrowser(collectUrl);
     collect = { sessionId, url: collectUrl, opened };
@@ -642,7 +651,10 @@ async function handleAuthorizePayment(args, ctx) {
   }
 
   if (!assuranceData) {
-    const bindingSessionId = createId("binding");
+    // Deterministic sessionId per paymentRequestId — if the agent calls
+    // authorize_payment twice in parallel for the same PR, both calls produce
+    // the same binding URL → one server-side session → one TouchID prompt for the user.
+    const bindingSessionId = `binding-${paymentRequestId}`;
     const bindingUrl = buildAppUrl(ctx, "/binding.html", {
       sessionId: bindingSessionId,
       buyer_id: buyerId,
