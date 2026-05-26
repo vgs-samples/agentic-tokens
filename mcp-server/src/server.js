@@ -118,6 +118,15 @@ const PAYMENT_CURRENCY = "USD";
 const MANDATE_QUANTITY = 1000;
 const INTENT_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
 
+// VGS is async on /cryptograms — first POST returns a "pending" shape
+// (data.attributes.intent_id + status, no cryptogram object) and the real
+// cryptogram becomes available a few seconds later. Instead of blocking inside
+// one tool call (would exceed Netlify's 10–26s function timeout), we return a
+// "waiting_for_cryptogram" status and have the agent poll by calling
+// authorize_payment again — same pattern as waiting_for_card / waiting_for_authentication.
+const CRYPTOGRAM_POLL_SECONDS = 5;
+const MAX_CRYPTOGRAM_ATTEMPTS = 6;
+
 // Server-level instructions surfaced to the MCP client at initialize time.
 // Clients (Claude Desktop, Cursor, etc.) include this in the model's context
 // whenever any tool from this server is referenced, so this is the right
@@ -166,6 +175,7 @@ When the user asks you to make / build / generate a marketing site, follow this 
    - **\`savedCard\` set AND \`walletReady\` false**: card on file, but no usable intent (first charge for this card, or the previous intent already expired). Print the saved-card line; mention that TouchID is required to create a new intent. Then call authorize_payment.
    - **\`savedCard\` null**: no card on file at all. Do NOT ask for confirmation again — the user already approved the $5 charge in step 4. Print "No card on file — opening card form." and IMMEDIATELY call authorize_payment. It will return status="waiting_for_card" with a URL; surface that URL to the user, wait for them to finish entering the card, then call authorize_payment again with the same paymentRequestId.
    - If authorize_payment returns "waiting_for_card" or "waiting_for_authentication", surface the URL to the user, wait for them to finish in the browser, then call authorize_payment AGAIN with the same paymentRequestId.
+   - If authorize_payment returns "waiting_for_cryptogram", the VGS cryptogram is still being generated (this typically takes 5–15 seconds after intent creation). Print "⏳ Generating payment cryptogram…", wait ~5 seconds, then call authorize_payment AGAIN with the same paymentRequestId — no other arguments. Repeat until status="completed". Do NOT call publish_site or any other tool while polling.
    - When authorize_payment returns status="completed", **first print the explicit success line from \`nextStep\`** to the user as its own short message. The format is fixed:
 
      > ✅ Payment successful — $5 USD charged on card ending <last4> (cryptogram \`<id>\`, ... intent valid until <date>).
@@ -516,66 +526,38 @@ async function handleAuthorizePayment(args, ctx) {
   const consumerEmail = args.consumerEmail || ctx.defaultConsumerEmail;
   const waitForBrowser = args.waitForBrowser ?? ctx.defaultWaitForBrowser;
 
-  // --- Fast path: existing wallet still has charges left on the TouchID-bound
-  // intent. Skip collect + binding + intent creation; just request a fresh
-  // one-time cryptogram from VGS for this $5 charge.
-  if (args.forceNewWallet !== true && args.useExistingCard !== false) {
-    const wallet = await getWalletState(ctx, buyerId);
-    if (isWalletUsable(wallet)) {
-      const cryptogram = await getCryptogram(ctx, wallet.tokenId, wallet.intentId, pr);
-      const paymentCredential = cryptogram?.data?.attributes;
-      if (!paymentCredential) throw new Error(`Cryptogram response returned no payment credential: ${JSON.stringify(cryptogram)}`);
-
-      const maskedCredential = maskPaymentCredential(paymentCredential);
-      const cryptogramId = extractCryptogramId(cryptogram);
-      if (cryptogramId === null) {
-        const shape = describeKeyShape(cryptogram).slice(0, 80).join(", ");
-        throw new Error(`Cryptogram still not ready after ${CRYPTOGRAM_RETRY_ATTEMPTS} attempts (response shape: ${shape}). Retry authorize_payment in a few seconds.`);
-      }
-
-      await saveWalletState(ctx, buyerId, {
-        ...wallet,
-        lastChargedAt: Date.now(),
-      });
-      await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, {
-        method: "PUT",
-        body: {
-          status: "completed",
-          completedAt: Date.now(),
-          cardId: wallet.cardId,
-          tokenId: wallet.tokenId,
-          intentId: wallet.intentId,
-          cryptogramId,
-          paymentCredential: maskedCredential,
-        },
-      });
-      await ctx.requestStore.delete(paymentRequestId);
-
-      return {
-        status: "completed",
-        paymentRequestId,
-        cardId: wallet.cardId,
-        intentId: wallet.intentId,
-        intentExpiresAt: wallet.intentExpiresAt,
-        cryptogramId,
-        paymentCredential: maskedCredential,
-        amount: pr.amount ?? PAYMENT_AMOUNT,
-        currency: pr.currency ?? PAYMENT_CURRENCY,
-        reusedWallet: true,
-        nextStep: `Payment is captured — deploy is now MANDATORY. Do all of the following in THIS SAME TURN, in this exact order:\n\n1. Print this EXACT success line:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, fast-path — no TouchID needed, existing intent valid until ${new Date(wallet.intentExpiresAt).toISOString().slice(0, 10)}).\n\n2. On the next line, print exactly:\n\n🚀 Starting deploy…\n\n3. IMMEDIATELY call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}". Do NOT stop, do NOT ask the user for permission — the user already paid, the deploy MUST follow. End-of-turn without calling publish_site is a bug.`,
-      };
-    }
-  }
-
-  // --- Slow path: full ceremony (no wallet yet, or wallet exhausted / expired).
-  // Local in-flight state — survives between non-blocking calls in stdio mode.
-  // In HTTP mode this is held in Blobs by the wrapping function.
+  // Load flow state early — we may be resuming a waiting_for_cryptogram poll
+  // (or any other waiting_for_* state). State survives between non-blocking
+  // calls in stdio mode (in-memory) and in HTTP mode (Netlify Blobs).
   const flow = (await ctx.requestStore.get(paymentRequestId)) ?? {
     paymentRequestId, buyerId, status: "running",
   };
   const previousStatus = flow.status;
   flow.status = "running";
 
+  // --- Resume path: cryptogram is being polled. Skip everything before, go
+  // straight back to the /cryptograms endpoint with the stored tokenId+intentId.
+  if (previousStatus === "waiting_for_cryptogram" && flow.tokenId && flow.intentId) {
+    return await attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr);
+  }
+
+  // --- Fast path: existing wallet still has charges left on the TouchID-bound
+  // intent. Skip collect + binding + intent creation; just request a fresh
+  // one-time cryptogram from VGS for this $5 charge (may also need polling).
+  if (args.forceNewWallet !== true && args.useExistingCard !== false) {
+    const wallet = await getWalletState(ctx, buyerId);
+    if (isWalletUsable(wallet)) {
+      flow.cardId = wallet.cardId;
+      flow.tokenId = wallet.tokenId;
+      flow.intentId = wallet.intentId;
+      flow.intentCreatedAt = wallet.intentCreatedAt;
+      flow.intentExpiresAt = wallet.intentExpiresAt;
+      flow.reusedWallet = true;
+      return await attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr);
+    }
+  }
+
+  // --- Slow path: full ceremony (no wallet yet, or wallet exhausted / expired).
   if (args.useExistingCard === false) flow.forceNewCard = true;
 
   let cardId = flow.cardId ?? args.cardId ?? null;
@@ -687,22 +669,56 @@ async function handleAuthorizePayment(args, ctx) {
   const intentId = intent?.data?.id;
   if (!intentId) throw new Error(`Intent creation returned no id: ${JSON.stringify(intent)}`);
 
-  const cryptogram = await getCryptogram(ctx, tokenId, intentId, pr);
+  flow.cardId = cardId;
+  flow.tokenId = tokenId;
+  flow.intentId = intentId;
+  flow.intentCreatedAt = Date.now();
+  flow.intentExpiresAt = Date.now() + INTENT_DURATION_MS;
+  flow.reusedWallet = false;
+  return await attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr);
+}
+
+// Shared cryptogram-fetch + finalize step used by both fast and slow paths.
+// VGS may need several seconds after intent creation before /cryptograms returns
+// the actual cryptogram (it first returns a "pending" shape with only intent_id
+// and status). Instead of blocking inside one tool call, we increment a counter
+// in flow state and return status="waiting_for_cryptogram" — the agent polls by
+// calling authorize_payment again after a short delay.
+async function attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr) {
+  const cryptogram = await getCryptogram(ctx, flow.tokenId, flow.intentId, pr);
   const paymentCredential = cryptogram?.data?.attributes;
   if (!paymentCredential) throw new Error(`Cryptogram response returned no payment credential: ${JSON.stringify(cryptogram)}`);
 
-  const maskedCredential = maskPaymentCredential(paymentCredential);
   const cryptogramId = extractCryptogramId(cryptogram);
+  const maskedCredential = maskPaymentCredential(paymentCredential);
+
   if (cryptogramId === null) {
-    const shape = describeKeyShape(cryptogram).slice(0, 80).join(", ");
-    throw new Error(`Cryptogram still not ready after ${CRYPTOGRAM_RETRY_ATTEMPTS} attempts (response shape: ${shape}). Retry authorize_payment in a few seconds.`);
+    flow.cryptogramAttempts = (flow.cryptogramAttempts ?? 0) + 1;
+    if (flow.cryptogramAttempts >= MAX_CRYPTOGRAM_ATTEMPTS) {
+      const shape = describeKeyShape(cryptogram).slice(0, 80).join(", ");
+      await ctx.requestStore.delete(paymentRequestId);
+      throw new Error(`Cryptogram still not ready after ${MAX_CRYPTOGRAM_ATTEMPTS} polling attempts (response shape: ${shape}). VGS may be unavailable — start over with a new publish_site call.`);
+    }
+    flow.status = "waiting_for_cryptogram";
+    await ctx.requestStore.set(paymentRequestId, flow);
+    return {
+      status: "waiting_for_cryptogram",
+      paymentRequestId,
+      attempts: flow.cryptogramAttempts,
+      maxAttempts: MAX_CRYPTOGRAM_ATTEMPTS,
+      retryAfterSeconds: CRYPTOGRAM_POLL_SECONDS,
+      message: `Cryptogram is being generated by VGS (poll ${flow.cryptogramAttempts}/${MAX_CRYPTOGRAM_ATTEMPTS}).`,
+      nextStep: `⏳ Print this exact line to the user:\n\n⏳ Generating payment cryptogram… (poll ${flow.cryptogramAttempts}/${MAX_CRYPTOGRAM_ATTEMPTS})\n\nThen wait ~${CRYPTOGRAM_POLL_SECONDS} seconds and call authorize_payment again with paymentRequestId="${paymentRequestId}" (no other arguments). The server will retry the VGS cryptogram fetch. Do NOT call publish_site, do NOT call any other Vellum tool — just wait and re-call authorize_payment until it returns status="completed".`,
+    };
   }
 
-  const intentExpiresAt = Date.now() + INTENT_DURATION_MS;
-  await saveWalletState(ctx, buyerId, {
+  const intentExpiresAt = flow.intentExpiresAt ?? (Date.now() + INTENT_DURATION_MS);
+  await saveWalletState(ctx, flow.buyerId, {
     plan: pr.plan, amount: pr.amount, currency: pr.currency,
-    cardId, tokenId, intentId,
-    intentCreatedAt: Date.now(),
+    cardId: flow.cardId,
+    tokenId: flow.tokenId,
+    intentId: flow.intentId,
+    intentCreatedAt: flow.intentCreatedAt ?? Date.now(),
     intentExpiresAt,
     lastChargedAt: Date.now(),
   });
@@ -712,7 +728,9 @@ async function handleAuthorizePayment(args, ctx) {
     body: {
       status: "completed",
       completedAt: Date.now(),
-      cardId, tokenId, intentId,
+      cardId: flow.cardId,
+      tokenId: flow.tokenId,
+      intentId: flow.intentId,
       cryptogramId,
       paymentCredential: maskedCredential,
     },
@@ -720,18 +738,19 @@ async function handleAuthorizePayment(args, ctx) {
 
   await ctx.requestStore.delete(paymentRequestId);
 
+  const reusedWallet = flow.reusedWallet ?? false;
   return {
     status: "completed",
     paymentRequestId,
-    cardId,
-    intentId,
+    cardId: flow.cardId,
+    intentId: flow.intentId,
     intentExpiresAt,
     cryptogramId,
     paymentCredential: maskedCredential,
     amount: pr.amount ?? PAYMENT_AMOUNT,
     currency: pr.currency ?? PAYMENT_CURRENCY,
-    reusedWallet: false,
-    nextStep: `Payment is captured — deploy is now MANDATORY. Do all of the following in THIS SAME TURN, in this exact order:\n\n1. Print this EXACT success line:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, first charge on a fresh TouchID-bound intent valid until ${new Date(intentExpiresAt).toISOString().slice(0, 10)}).\n\n2. On the next line, print exactly:\n\n🚀 Starting deploy…\n\n3. IMMEDIATELY call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}". Do NOT stop, do NOT ask the user for permission — the user already paid, the deploy MUST follow. End-of-turn without calling publish_site is a bug.`,
+    reusedWallet,
+    nextStep: `Payment is captured — deploy is now MANDATORY. Do all of the following in THIS SAME TURN, in this exact order:\n\n1. Print this EXACT success line:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, ${reusedWallet ? "fast-path — no TouchID needed, existing intent" : "first charge on a fresh TouchID-bound intent"} valid until ${new Date(intentExpiresAt).toISOString().slice(0, 10)}).\n\n2. On the next line, print exactly:\n\n🚀 Starting deploy…\n\n3. IMMEDIATELY call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}". Do NOT stop, do NOT ask the user for permission — the user already paid, the deploy MUST follow. End-of-turn without calling publish_site is a bug.`,
   };
 }
 
@@ -935,47 +954,34 @@ async function createPaymentIntent(ctx, tokenId, assuranceData, paymentRequest) 
   });
 }
 
-const CRYPTOGRAM_RETRY_ATTEMPTS = 3;
-const CRYPTOGRAM_RETRY_DELAY_MS = 3000;
-
 async function getCryptogram(ctx, tokenId, intentId, paymentRequest) {
-  // VGS returns a "pending" shape (data.attributes = { intent_id, status }, no
-  // cryptogram object) when /cryptograms is called immediately after intent
-  // creation — the cryptogram is still being generated server-side. Retry a
-  // few times with a delay before giving up.
-  const body = {
-    data: {
-      type: "cryptograms",
-      attributes: {
-        transaction_data: [{
-          merchant_country_code: "US",
-          transaction_amount: {
-            transaction_amount: formatAmount(paymentRequest.amount),
-            transaction_currency_code: paymentRequest.currency,
-          },
-          merchant_url: "https://vellum.example",
-          merchant_name: "Vellum",
-        }],
+  // Single POST. Retry semantics live at the tool-call level via the
+  // "waiting_for_cryptogram" state — the agent polls by calling authorize_payment
+  // again after a few seconds. This keeps each HTTP function call short enough
+  // to fit inside Netlify's 10–26s timeout.
+  const response = await apiFetch(ctx, `/cryptograms?tokenId=${encodeURIComponent(tokenId)}&intentId=${encodeURIComponent(intentId)}`, {
+    method: "POST",
+    body: {
+      data: {
+        type: "cryptograms",
+        attributes: {
+          transaction_data: [{
+            merchant_country_code: "US",
+            transaction_amount: {
+              transaction_amount: formatAmount(paymentRequest.amount),
+              transaction_currency_code: paymentRequest.currency,
+            },
+            merchant_url: "https://vellum.example",
+            merchant_name: "Vellum",
+          }],
+        },
       },
     },
-  };
-
-  let response;
-  for (let attempt = 1; attempt <= CRYPTOGRAM_RETRY_ATTEMPTS; attempt++) {
-    response = await apiFetch(ctx, `/cryptograms?tokenId=${encodeURIComponent(tokenId)}&intentId=${encodeURIComponent(intentId)}`, {
-      method: "POST",
-      body,
-    });
-    // Set AGENTIC_DEBUG_CRYPTOGRAM=true to dump the response shape (keys only,
-    // no sensitive values) to stderr so we can refine maskPaymentCredential.
-    if (process.env.AGENTIC_DEBUG_CRYPTOGRAM === "true" && response) {
-      log(`cryptogram response shape (attempt ${attempt}): ${describeKeyShape(response).slice(0, 60).join(", ")}`);
-    }
-    if (extractCryptogramId(response) !== null) return response;
-    if (attempt < CRYPTOGRAM_RETRY_ATTEMPTS) {
-      log(`Cryptogram not ready (attempt ${attempt}/${CRYPTOGRAM_RETRY_ATTEMPTS}) — waiting ${CRYPTOGRAM_RETRY_DELAY_MS}ms before retry`);
-      await sleep(CRYPTOGRAM_RETRY_DELAY_MS);
-    }
+  });
+  // Set AGENTIC_DEBUG_CRYPTOGRAM=true to dump the response shape (keys only,
+  // no sensitive values) to stderr so we can refine maskPaymentCredential.
+  if (process.env.AGENTIC_DEBUG_CRYPTOGRAM === "true" && response) {
+    log(`cryptogram response shape: ${describeKeyShape(response).slice(0, 60).join(", ")}`);
   }
   return response;
 }
@@ -1161,6 +1167,16 @@ function formatAuthorizePayment(result) {
     const niceStatus = result.status.replace(/_/g, " ");
     const msg = result.message ? `\n\n${result.message}` : "";
     return `⏳ **${niceStatus}**\n\n${action}\n${url}${msg}`;
+  }
+  if (result.status === "waiting_for_cryptogram") {
+    const lines = [
+      `⏳ **Cryptogram generating** — poll ${result.attempts}/${result.maxAttempts}`,
+      "",
+      `VGS needs a moment to generate the one-time cryptogram for this $${PAYMENT_AMOUNT} charge. Wait ~${result.retryAfterSeconds}s and call authorize_payment again with the same paymentRequestId.`,
+      "",
+      `_${result.nextStep}_`,
+    ];
+    return lines.join("\n");
   }
   return JSON.stringify(result);
 }
