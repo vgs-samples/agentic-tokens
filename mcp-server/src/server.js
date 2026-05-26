@@ -526,19 +526,17 @@ async function handleAuthorizePayment(args, ctx) {
       const paymentCredential = cryptogram?.data?.attributes;
       if (!paymentCredential) throw new Error(`Cryptogram response returned no payment credential: ${JSON.stringify(cryptogram)}`);
 
+      const maskedCredential = maskPaymentCredential(paymentCredential);
+      const cryptogramId = extractCryptogramId(cryptogram);
+      if (cryptogramId === null) {
+        const shape = describeKeyShape(cryptogram).slice(0, 80).join(", ");
+        throw new Error(`Cryptogram still not ready after ${CRYPTOGRAM_RETRY_ATTEMPTS} attempts (response shape: ${shape}). Retry authorize_payment in a few seconds.`);
+      }
+
       await saveWalletState(ctx, buyerId, {
         ...wallet,
         lastChargedAt: Date.now(),
       });
-
-      const maskedCredential = maskPaymentCredential(paymentCredential);
-      const cryptogramId = extractCryptogramId(cryptogram);
-      // Diagnostic: if extraction returned null, surface the raw response
-      // shape so we can spot which path the data actually lives under.
-      const diagnostic = (cryptogramId === null || !maskedCredential?.dpanLast4)
-        ? `Diagnostic — extraction returned null. Cryptogram response shape: ${describeKeyShape(cryptogram).slice(0, 80).join(", ")}`
-        : null;
-      if (diagnostic) log(diagnostic);
       await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, {
         method: "PUT",
         body: {
@@ -549,7 +547,6 @@ async function handleAuthorizePayment(args, ctx) {
           intentId: wallet.intentId,
           cryptogramId,
           paymentCredential: maskedCredential,
-          rawCryptogramShape: diagnostic,
         },
       });
       await ctx.requestStore.delete(paymentRequestId);
@@ -562,7 +559,6 @@ async function handleAuthorizePayment(args, ctx) {
         intentExpiresAt: wallet.intentExpiresAt,
         cryptogramId,
         paymentCredential: maskedCredential,
-        rawCryptogramShape: diagnostic,
         amount: pr.amount ?? PAYMENT_AMOUNT,
         currency: pr.currency ?? PAYMENT_CURRENCY,
         reusedWallet: true,
@@ -695,6 +691,13 @@ async function handleAuthorizePayment(args, ctx) {
   const paymentCredential = cryptogram?.data?.attributes;
   if (!paymentCredential) throw new Error(`Cryptogram response returned no payment credential: ${JSON.stringify(cryptogram)}`);
 
+  const maskedCredential = maskPaymentCredential(paymentCredential);
+  const cryptogramId = extractCryptogramId(cryptogram);
+  if (cryptogramId === null) {
+    const shape = describeKeyShape(cryptogram).slice(0, 80).join(", ");
+    throw new Error(`Cryptogram still not ready after ${CRYPTOGRAM_RETRY_ATTEMPTS} attempts (response shape: ${shape}). Retry authorize_payment in a few seconds.`);
+  }
+
   const intentExpiresAt = Date.now() + INTENT_DURATION_MS;
   await saveWalletState(ctx, buyerId, {
     plan: pr.plan, amount: pr.amount, currency: pr.currency,
@@ -704,12 +707,6 @@ async function handleAuthorizePayment(args, ctx) {
     lastChargedAt: Date.now(),
   });
 
-  const maskedCredential = maskPaymentCredential(paymentCredential);
-  const cryptogramId = extractCryptogramId(cryptogram);
-  const diagnostic = (cryptogramId === null || !maskedCredential?.dpanLast4)
-    ? `Diagnostic — extraction returned null. Cryptogram response shape: ${describeKeyShape(cryptogram).slice(0, 80).join(", ")}`
-    : null;
-  if (diagnostic) log(diagnostic);
   await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, {
     method: "PUT",
     body: {
@@ -718,7 +715,6 @@ async function handleAuthorizePayment(args, ctx) {
       cardId, tokenId, intentId,
       cryptogramId,
       paymentCredential: maskedCredential,
-      rawCryptogramShape: diagnostic,
     },
   });
 
@@ -732,7 +728,6 @@ async function handleAuthorizePayment(args, ctx) {
     intentExpiresAt,
     cryptogramId,
     paymentCredential: maskedCredential,
-    rawCryptogramShape: diagnostic,
     amount: pr.amount ?? PAYMENT_AMOUNT,
     currency: pr.currency ?? PAYMENT_CURRENCY,
     reusedWallet: false,
@@ -940,30 +935,47 @@ async function createPaymentIntent(ctx, tokenId, assuranceData, paymentRequest) 
   });
 }
 
+const CRYPTOGRAM_RETRY_ATTEMPTS = 3;
+const CRYPTOGRAM_RETRY_DELAY_MS = 3000;
+
 async function getCryptogram(ctx, tokenId, intentId, paymentRequest) {
-  const response = await apiFetch(ctx, `/cryptograms?tokenId=${encodeURIComponent(tokenId)}&intentId=${encodeURIComponent(intentId)}`, {
-    method: "POST",
-    body: {
-      data: {
-        type: "cryptograms",
-        attributes: {
-          transaction_data: [{
-            merchant_country_code: "US",
-            transaction_amount: {
-              transaction_amount: formatAmount(paymentRequest.amount),
-              transaction_currency_code: paymentRequest.currency,
-            },
-            merchant_url: "https://vellum.example",
-            merchant_name: "Vellum",
-          }],
-        },
+  // VGS returns a "pending" shape (data.attributes = { intent_id, status }, no
+  // cryptogram object) when /cryptograms is called immediately after intent
+  // creation — the cryptogram is still being generated server-side. Retry a
+  // few times with a delay before giving up.
+  const body = {
+    data: {
+      type: "cryptograms",
+      attributes: {
+        transaction_data: [{
+          merchant_country_code: "US",
+          transaction_amount: {
+            transaction_amount: formatAmount(paymentRequest.amount),
+            transaction_currency_code: paymentRequest.currency,
+          },
+          merchant_url: "https://vellum.example",
+          merchant_name: "Vellum",
+        }],
       },
     },
-  });
-  // Set AGENTIC_DEBUG_CRYPTOGRAM=true to dump the response shape (keys only,
-  // no sensitive values) to stderr so we can refine maskPaymentCredential.
-  if (process.env.AGENTIC_DEBUG_CRYPTOGRAM === "true" && response) {
-    log(`cryptogram response shape: ${describeKeyShape(response).slice(0, 60).join(", ")}`);
+  };
+
+  let response;
+  for (let attempt = 1; attempt <= CRYPTOGRAM_RETRY_ATTEMPTS; attempt++) {
+    response = await apiFetch(ctx, `/cryptograms?tokenId=${encodeURIComponent(tokenId)}&intentId=${encodeURIComponent(intentId)}`, {
+      method: "POST",
+      body,
+    });
+    // Set AGENTIC_DEBUG_CRYPTOGRAM=true to dump the response shape (keys only,
+    // no sensitive values) to stderr so we can refine maskPaymentCredential.
+    if (process.env.AGENTIC_DEBUG_CRYPTOGRAM === "true" && response) {
+      log(`cryptogram response shape (attempt ${attempt}): ${describeKeyShape(response).slice(0, 60).join(", ")}`);
+    }
+    if (extractCryptogramId(response) !== null) return response;
+    if (attempt < CRYPTOGRAM_RETRY_ATTEMPTS) {
+      log(`Cryptogram not ready (attempt ${attempt}/${CRYPTOGRAM_RETRY_ATTEMPTS}) — waiting ${CRYPTOGRAM_RETRY_DELAY_MS}ms before retry`);
+      await sleep(CRYPTOGRAM_RETRY_DELAY_MS);
+    }
   }
   return response;
 }
@@ -1137,9 +1149,6 @@ function formatAuthorizePayment(result) {
     if (result.intentExpiresAt) {
       const dateStr = new Date(result.intentExpiresAt).toISOString().slice(0, 10);
       lines.push(`| Intent valid until | **${dateStr}** ${result.reusedWallet ? "(reused — no TouchID this time)" : "(fresh — created by this TouchID)"} |`);
-    }
-    if (result.rawCryptogramShape) {
-      lines.push("", `> ⚠️ ${result.rawCryptogramShape}`);
     }
     lines.push("", `_${result.nextStep}_`);
     return lines.join("\n");
