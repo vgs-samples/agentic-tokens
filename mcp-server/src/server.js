@@ -148,7 +148,7 @@ The rule:
 3. Read the result.
 4. Then emit the next tool call (in a new turn).
 
-This applies to every transition: render → publish_site(1) → authorize_payment → publish_site(2).
+This applies to every transition: create_marketing_site/render_marketing_site → publish_site(1) → authorize_payment → publish_site(2).
 
 ## Workflow
 
@@ -156,7 +156,7 @@ When the user asks you to make / build / generate a marketing site, follow this 
 
 1. **Generate a JSON params object** that fits the user's brief. The schema is enforced by render_marketing_site / publish_site. Required top-level keys: brand, themeColor, hero, stats (x4), about, why (6 features), prices (3 tiers), reviews (3 items), imageSeeds. Tailor every text field to the user's theme — company name, tagline, USPs, feature titles, price tiers, fake testimonial text + cities, etc. Pick a themeColor that matches the brand (e.g. emerald for eco, rose for food, sky for tech, amber for warmth). Pick descriptive picsum imageSeeds (e.g. "berry-farm-2024", "mountain-coffee-roastery").
 
-2. **Before calling the tool, write exactly ONE short prose sentence** describing the design in human terms. Example: "Drafting a landing page for **Acme Coffee Co** — premium beans, emerald theme." That single sentence is the ONLY thing the user should see about the params. Do not paste, summarize, enumerate, or otherwise echo the JSON in chat — the preview is the canonical view, and the user does not want to read 200 lines of JSON. Then call **render_marketing_site** with the params object. It returns \`siteId\` and \`previewUrl\`; HTTP-style previews also return \`artifactHtml\`, while local previews return \`previewPath\`.
+2. **Before calling the tool, write exactly ONE short prose sentence** describing the design in human terms. Example: "Drafting a landing page for **Acme Coffee Co** — premium beans, emerald theme." That single sentence is the ONLY thing the user should see about the params. Do not paste, summarize, enumerate, or otherwise echo the JSON in chat — the preview is the canonical view, and the user does not want to read 200 lines of JSON. Then call **create_marketing_site** with the params object. \`render_marketing_site\` is kept as a backward-compatible alias for the same preview step. Both return \`siteId\` and \`previewUrl\`; HTTP-style previews also return \`artifactHtml\`, while local previews return \`previewPath\`.
 
 3. **Show the preview to the user using whichever inline mechanism your client supports**, in this priority order:
    a. **Codex CLI / terminal client**: paste the returned \`previewUrl\` or \`previewPath\` and ask the user to open it manually. Do not claim a browser opened unless the tool result has \`opened=true\`.
@@ -193,7 +193,7 @@ When the user asks you to make / build / generate a marketing site, follow this 
 
 # Anti-patterns — do not do these:
 
-- **Do NOT write raw HTML.** The server renders everything from params. If you find yourself writing <!doctype html> or any HTML tags (other than the artifactHtml iframe wrapper), stop and call render_marketing_site instead.
+- **Do NOT write raw HTML.** The server renders everything from params. If you find yourself writing <!doctype html> or any HTML tags (other than the artifactHtml iframe wrapper), stop and call create_marketing_site instead.
 - **Do NOT echo the params JSON in chat** — not before the tool call, not after, not as a code block, not as a bullet list, not as a "here's what I'm building" summary of every field. One short prose sentence (step 2) is the whole user-visible description. The tool's arguments panel and preview cover the rest.
 - **Do NOT write the params or HTML to a local file** (other than the artifactHtml iframe wrapper from step 3a). Pass params directly to the tool as JSON.
 - **Do NOT skip step 3 (the preview).** The preview is how the user reviews the page. Without it they can't see what they're about to pay for.
@@ -202,7 +202,7 @@ When the user asks you to make / build / generate a marketing site, follow this 
 - **Do NOT batch Vellum tool calls in the same assistant turn.** Especially never \`authorize_payment\` + \`publish_site\` together. They depend on each other; running in parallel triggers retries and double-charges in the trace. One call per turn. Period. (See the "one tool call per turn" rule at the top of these instructions.)
 - **Do NOT pass paymentRequestId on the FIRST publish_site call** of a new site. That parameter is only for the second (post-payment) call. Passing it on the first call will fail.
 - **Do NOT reuse a paymentRequestId across sites.** Each site costs $5 and needs its own paymentRequestId. Reusing one fails with "already redeemed".
-- **Do NOT call publish_site before render_marketing_site.** The user must preview before paying.
+- **Do NOT call publish_site before create_marketing_site/render_marketing_site.** The user must preview before paying.
 - **Do NOT mention "subscription" or "monthly".** This model is one-time-per-site. The wallet is just an authorization that lets us skip TouchID **while the intent is still valid** (i.e., before \`intentExpiresAt\`); it is not a flat-rate plan.`;
 
 function buildServerInstructions(clientMode) {
@@ -259,11 +259,7 @@ export function createMcpServer(options) {
 
   const server = new McpServer(SERVER_INFO, { instructions: buildServerInstructions(ctx.clientMode) });
 
-  server.registerTool(
-    "render_marketing_site",
-    {
-      title: "Render a marketing site preview",
-      description: `Render a marketing landing page from a JSON \`params\` object. Stores the rendered HTML server-side as a preview (10-minute TTL) and returns \`{ siteId, previewUrl, artifactHtml }\`.
+  const previewToolDescription = `Create a marketing landing page preview from a JSON \`params\` object. Use this when the user asks to create, build, make, draft, or generate a marketing website, landing page, or promo site. The server renders the page from a fixed polished template and returns \`{ siteId, previewUrl }\`; local stdio previews also return \`previewPath\`, and HTTP-style previews also return \`artifactHtml\`.
 
 The agent should then show the preview using the best surface its client supports:
 - Codex CLI / terminal clients: paste the returned \`previewUrl\` or \`previewPath\` so the user can open it.
@@ -272,7 +268,24 @@ The agent should then show the preview using the best surface its client support
 
 Use this BEFORE publish_site. The same params produce identical HTML, so previewing and publishing are deterministically the same page.
 
-Do NOT write raw HTML yourself — generate only the params JSON.`,
+Do NOT write raw HTML yourself — generate only the params JSON.`;
+
+  server.registerTool(
+    "create_marketing_site",
+    {
+      title: "Create a marketing site preview",
+      description: previewToolDescription,
+      inputSchema: { params: siteParamsSchema },
+      annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    (args) => wrapToolResult("create_marketing_site", () => handleRenderMarketingSite(args, ctx)),
+  );
+
+  server.registerTool(
+    "render_marketing_site",
+    {
+      title: "Render a marketing site preview",
+      description: `${previewToolDescription}\n\nBackward-compatible alias: prefer create_marketing_site for new create/build/make requests.`,
       inputSchema: { params: siteParamsSchema },
       annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -1093,7 +1106,7 @@ async function wrapToolResult(name, fn) {
 }
 
 function formatToolText(name, result) {
-  if (name === "render_marketing_site") return formatRenderSite(result);
+  if (name === "create_marketing_site" || name === "render_marketing_site") return formatRenderSite(result);
   if (name === "publish_site") return formatPublishSite(result);
   if (name === "authorize_payment") return formatAuthorizePayment(result);
   if (name === "wallet_status") return formatWalletStatus(result);

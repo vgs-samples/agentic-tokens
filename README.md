@@ -77,18 +77,32 @@ netlify dev
 
 On top of the Agentic Tokens building blocks, the repo ships a quick-start demo of a fictional dev-tool startup called **Vellum**. It lets any AI agent connected via MCP:
 
-1. **generate a marketing landing page in the chat itself** — Claude writes the HTML, renders it as an Artifact for the user to preview live,
-2. attempt to publish — the server returns `payment_required` ($5/month hosting),
-3. propose the subscription to the user,
-4. on approval, run the existing VGS device-binding flow (TouchID / FIDO / OTP) and create a recurring intent + cryptogram,
-5. retry `publish_site` with the same HTML — site becomes live at `https://<your-site>/s/<siteId>`.
+1. render a marketing landing page preview from a small JSON params object,
+2. attempt to publish — the server returns `payment_required` for a one-time $5 hosting charge,
+3. on approval, run the existing VGS device-binding flow (TouchID / FIDO / OTP) and capture a cryptogram-backed payment,
+4. retry `publish_site` with the same params — site becomes live at `https://<your-site>/s/<siteId>`.
 
-The HTML is generated client-side by the LLM and only reaches the server after the user pays. No server-side template, no drafts.
+The HTML is rendered by the MCP server from a fixed template. The LLM only supplies the structured params that fill the page.
 
 Two transports ship together:
 
 - **HTTP** — deployed at `/mcp` via `netlify/functions/mcp.js`. Connect a remote MCP client to `https://<your-site>/mcp` — no local install.
 - **stdio** — `node mcp-server/src/index.js` for desktop MCP clients. Desktop mode can auto-open browser tabs at the right moments.
 - **Codex CLI stdio** — `npm run mcp:codex` starts the same MCP server with URL handoff: it writes local previews to `/tmp`, returns `file://` / browser URLs, and does not block waiting for GUI browser steps.
+
+Codex CLI users can install the GitHub-hosted server directly:
+
+```bash
+codex mcp add vellum \
+  --env AGENTIC_CLIENT_MODE=codex-cli \
+  --env AGENTIC_APP_BASE_URL=https://vgs-agentic-tokens.netlify.app \
+  -- npx -y github:vgs-samples/agentic-tokens
+```
+
+Recommended test prompt:
+
+```text
+Use the Vellum MCP server for this. Create a marketing landing page for Acme Coffee Co — premium coffee with a subscription. Call create_marketing_site first and show me the preview URL.
+```
 
 See `mcp-server/README.md` for the demo script, the tool contract, and copy-paste configs.

@@ -1,14 +1,15 @@
 # Vellum — MCP Server
 
-Quick-start demo of a fictional startup: an AI agent can spin up a marketing landing page for the user, the agency charges $5/month to host it, and the subscription is authorized via VGS Agentic Tokens (TouchID-bound intent + network cryptogram).
+Quick-start demo of a fictional startup: an AI agent can spin up a marketing landing page for the user, the agency charges a one-time $5 hosting fee per published site, and the payment is authorized via VGS Agentic Tokens (TouchID-bound intent + network cryptogram).
 
 The MCP server exposes the agency's product surface; the React app on the same site renders the hosted pages and handles the device-binding step.
 
 ## What's in the box
 
-- **`publish_site(html, companyName?, buyerId?)`** — the agent generates the full HTML itself, renders it as an Artifact in Claude Desktop for the user to preview, then calls this tool to publish. Returns the live `/s/<siteId>` URL on success, or `status: payment_required` with a `paymentRequestId` if the buyer has no active subscription.
-- **`authorize_subscription(paymentRequestId)`** — triggers the existing VGS device-binding flow (opens `/binding.html` for TouchID / FIDO / OTP) and creates a recurring intent + cryptogram. Marks the buyer as having an active subscription for 30 days.
-- **`list_subscriptions(buyerId?)`** / **`cancel_subscription(buyerId?)`** — read/cancel.
+- **`create_marketing_site(params)`** / **`render_marketing_site(params)`** — renders the first preview from a small JSON params object. `create_marketing_site` is the preferred tool name for Codex CLI because it matches common prompts like "create a marketing site".
+- **`publish_site(params, buyerId?, paymentRequestId?)`** — publishes the preview after payment. First call returns `status: payment_required` with a `paymentRequestId`; second call with that completed request publishes `/s/<siteId>`.
+- **`authorize_payment(paymentRequestId)`** — triggers card collection when needed, runs device binding (TouchID / FIDO / OTP), and captures a one-time $5 cryptogram-backed charge.
+- **`wallet_status(buyerId?)`** / **`clear_wallet(buyerId?)`** — inspect or clear the buyer's reusable TouchID-bound payment intent.
 - **`list_buyer_cards(buyerId?)`** / **`forget_card(buyerId?, cardId?)`** — card management.
 
 Built on `@modelcontextprotocol/sdk@^1.29`. Two transports ship together:
@@ -21,60 +22,56 @@ Built on `@modelcontextprotocol/sdk@^1.29`. Two transports ship together:
 ```text
 You: Make me a marketing site for "Acme Coffee Co" — premium coffee with a subscription.
 
-Agent: [Generates full HTML inline; creates an HTML Artifact]
-       Claude Desktop opens the artifact side panel and renders the page live.
+Agent: [create_marketing_site(params)] → preview, sABC123
+       Shows previewUrl / previewPath.
 
-       "Shall I publish this for $5/month?"
-
-You:  yes
-
-Agent: [publish_site(html, companyName="Acme Coffee Co")] → payment_required, prXYZ
-       "Hosting needs a $5/month Vellum subscription. Approve?"
+       "Shall I publish this for $5?"
 
 You:  yes
 
-Agent: [authorize_subscription(prXYZ)] → waiting_for_authentication
-       Open the binding URL and complete TouchID:
-       https://vgs-agentic-tokens.netlify.app/binding.html?…
+Agent: [publish_site(params)] → payment_required, prXYZ
 
-You:  [opens, completes TouchID, comes back] "done"
+Agent: [authorize_payment(prXYZ)] → waiting_for_card / waiting_for_authentication
+       Open the returned URL and complete the browser step.
 
-Agent: [authorize_subscription(prXYZ) — resume] → status: completed
-       ✅ Subscription active until 2026-06-20.
+You:  done
 
-       [publish_site(html, …) — retry with the SAME html] → status: published
+Agent: [authorize_payment(prXYZ) — resume] → status: completed
+       ✅ Payment successful — $5 USD charged on card ending 1234 (cryptogram `cr_...`).
+
+       [publish_site(params, paymentRequestId="prXYZ")] → status: published
        🚀 Live: https://vgs-agentic-tokens.netlify.app/s/sXXX
 ```
 
-The user clicks the live URL and sees the same page they previewed in the Artifact panel — now public.
+The user clicks the live URL and sees the same page they previewed — now public.
 
-## Where the HTML is generated
+## Where the HTML comes from
 
-The agent (Claude in the chat) writes the full HTML itself, using Tailwind via CDN and picsum images. The MCP server has **no HTML template** — it only stores already-paid-for HTML and hosts it at `/s/:id`.
+The agent does **not** write raw HTML. It sends a small JSON `params` object, and the MCP server renders a fixed, polished template from those params.
 
 This means:
-- The HTML is generated **client-side** in the user's Claude Desktop session
-- The user previews it in the **Artifact panel** before any server contact for the HTML body
-- The HTML only reaches the server **after the user confirms publishing**
-- After payment, `/s/:id` serves it permanently (24-hour TTL on the Blob)
+- The generated page shape stays consistent across clients.
+- The user previews the rendered page before paying.
+- The same params are used for preview and publish.
+- After payment, `/s/:id` serves the published site.
 
 ## How "the agent auto-proposes payment" works
 
 It's the **402 pattern over MCP**, not prompt engineering:
 
-1. `publish_site(html, …)` returns `{ status: "payment_required", paymentRequestId, amount, plan, description, nextStep }`.
+1. `publish_site(params, …)` returns `{ status: "payment_required", paymentRequestId, amount, plan, description, nextStep }`.
 2. Any decent LLM reads `nextStep` and surfaces the question to the user.
-3. After the user agrees, the agent calls `authorize_subscription(paymentRequestId)` — that tool runs the VGS binding + intent + cryptogram flow.
-4. The agent retries `publish_site` with the same HTML, and gets `status: published`.
+3. After the user agrees, the agent calls `authorize_payment(paymentRequestId)` — that tool runs card collection if needed, VGS binding, intent creation, and cryptogram capture.
+4. The agent retries `publish_site` with the same params and completed `paymentRequestId`, and gets `status: published`.
 
 The recurring mandate created on the VGS side has:
 - `decline_threshold: { amount: 5, currency_code: "USD" }`
 - `effective_until: now + 1 year`
-- `quantity: 12` (twelve monthly charges)
+- `quantity: 1000` (the effective-until date is the practical limit)
 - `preferred_merchant_name: "Vellum"`
 - `merchant_category_code: 4816` (Computer Network Services)
 
-After the first cryptogram, subsequent monthly charges can reuse the same intent without re-binding — the assurance is bound to the user's device for the life of the mandate.
+After the first cryptogram, subsequent $5 publish charges can reuse the same intent until it expires — the assurance is bound to the user's device for the life of the mandate.
 
 ## Install in an MCP client
 
@@ -105,7 +102,7 @@ If your client doesn't speak Streamable HTTP yet, use the `mcp-remote` shim:
 ```
 
 **HTTP-mode behavior differences:**
-- `authorize_subscription` is **always non-blocking** — when a browser step is needed, the tool returns `status: waiting_for_card` / `waiting_for_authentication` with the URL inside `content[]`. The agent surfaces the URL to the user, who opens it manually. After the user completes the step, the agent calls `authorize_subscription` again with the same `paymentRequestId` to advance.
+- `authorize_payment` is **always non-blocking** — when a browser step is needed, the tool returns `status: waiting_for_card` / `waiting_for_authentication` with the URL inside `content[]`. The agent surfaces the URL to the user, who opens it manually. After the user completes the step, the agent calls `authorize_payment` again with the same `paymentRequestId` to advance.
 - Mid-flow state is stored in **Netlify Blobs** (store name `agentic-mcp-flow-state`, 30-minute TTL).
 
 **Quick smoke check** — the endpoint speaks JSON-RPC over POST:
@@ -153,19 +150,41 @@ Codex CLI should run the stdio server in URL-handoff mode. In this mode the serv
 - returns collect / binding URLs instead of trying to open a GUI browser;
 - does not block inside `authorize_payment` while waiting for the user to finish a browser step.
 
+Shareable GitHub install:
+
+```bash
+codex mcp remove vellum 2>/dev/null || true
+codex mcp add vellum \
+  --env AGENTIC_CLIENT_MODE=codex-cli \
+  --env AGENTIC_APP_BASE_URL=https://vgs-agentic-tokens.netlify.app \
+  -- npx -y github:vgs-samples/agentic-tokens
+```
+
+Recommended test prompt:
+
+```text
+Use the Vellum MCP server for this. Create a marketing landing page for Acme Coffee Co — premium coffee with a subscription. Call create_marketing_site first and show me the preview URL.
+```
+
+To test a branch or tag instead of the default branch, append it to the GitHub spec:
+
+```bash
+npx -y github:vgs-samples/agentic-tokens#main
+```
+
 Example `~/.codex/config.toml` entry:
 
 ```toml
 [mcp_servers.vellum]
-command = "npm"
-args = ["run", "mcp:codex", "--silent"]
-cwd = "/absolute/path/to/agentic-tokens"
+command = "npx"
+args = ["-y", "github:vgs-samples/agentic-tokens"]
 
 [mcp_servers.vellum.env]
+AGENTIC_CLIENT_MODE = "codex-cli"
 AGENTIC_APP_BASE_URL = "https://vgs-agentic-tokens.netlify.app"
 ```
 
-Equivalent direct command:
+Equivalent local direct command for development:
 
 ```bash
 AGENTIC_CLIENT_MODE=codex-cli node /absolute/path/to/agentic-tokens/mcp-server/src/index.js
@@ -197,4 +216,4 @@ cd mcp-server
 node scripts/smoke.js
 ```
 
-Spawns a mock backend on an ephemeral port and round-trips `initialize` + `tools/list` + `render_marketing_site` + `publish_site` (expecting `payment_required`) over stdio in Codex CLI mode.
+Spawns a mock backend on an ephemeral port and round-trips `initialize` + `tools/list` + `create_marketing_site` + `publish_site` (expecting `payment_required`) over stdio in Codex CLI mode.

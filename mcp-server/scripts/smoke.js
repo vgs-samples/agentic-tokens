@@ -180,7 +180,7 @@ const sampleParams = {
 
 send({
   jsonrpc: "2.0", id: 3, method: "tools/call",
-  params: { name: "render_marketing_site", arguments: { params: sampleParams } },
+  params: { name: "create_marketing_site", arguments: { params: sampleParams } },
 });
 
 send({
@@ -197,7 +197,7 @@ const renderResult = messages.find((m) => m.id === 3);
 const publishResult = messages.find((m) => m.id === 4);
 
 const expectedTools = [
-  "render_marketing_site", "publish_site", "authorize_payment",
+  "create_marketing_site", "render_marketing_site", "publish_site", "authorize_payment",
   "wallet_status", "clear_wallet", "list_buyer_cards", "forget_card",
 ];
 const gotTools = tools?.result?.tools?.map((t) => t.name).sort();
