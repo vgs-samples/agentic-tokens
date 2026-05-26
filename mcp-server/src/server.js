@@ -426,17 +426,18 @@ async function handlePublishSite(args, ctx) {
       method: "PUT",
       body: { redeemed: true, redeemedAt: Date.now(), siteId },
     });
+    const liveUrl = `${ctx.appBaseUrl}/s/${siteId}`;
     return {
       status: "published",
       siteId,
-      url: `${ctx.appBaseUrl}/s/${siteId}`,
+      url: liveUrl,
       companyName,
       paymentRequestId: args.paymentRequestId,
       amount: pr.amount ?? PAYMENT_AMOUNT,
       currency: pr.currency ?? PAYMENT_CURRENCY,
       cryptogramId: pr.cryptogramId ?? null,
       paymentCredential: pr.paymentCredential ?? null,
-      nextStep: `Site is live. Your final assistant message must be SHORT — just announce the URL. Suggested format:\n\n🚀 Published: <URL>\n\nThe payment success line was already shown in the previous step — do NOT repeat the amount, card, or cryptogram id here. Keep it to one line with the live URL.`,
+      nextStep: `Site is live. Your final assistant message MUST announce the URL — omitting it is a bug. Print this EXACT line on its own line:\n\n✅ Deploy complete — ${liveUrl}\n\nDo NOT repeat the payment amount, card, or cryptogram id — those were already shown. The URL must be clickable, on a single line.`,
     };
   }
 
@@ -501,7 +502,7 @@ async function handleAuthorizePayment(args, ctx) {
       intentId: pr.intentId ?? null,
       cryptogramId: pr.cryptogramId ?? null,
       paymentCredential: pr.paymentCredential ?? null,
-      nextStep: `Charge already captured. Call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
+      nextStep: `Charge already captured — deploy is MANDATORY. In THIS SAME TURN: print "🚀 Starting deploy…" on its own line, then IMMEDIATELY call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}". Do NOT ask the user for permission. End-of-turn without calling publish_site is a bug.`,
     };
   }
 
@@ -559,7 +560,7 @@ async function handleAuthorizePayment(args, ctx) {
         amount: pr.amount ?? PAYMENT_AMOUNT,
         currency: pr.currency ?? PAYMENT_CURRENCY,
         reusedWallet: true,
-        nextStep: `Before calling publish_site, print this EXACT success line to the user as its own short message:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, fast-path — no TouchID needed, existing intent valid until ${new Date(wallet.intentExpiresAt).toISOString().slice(0, 10)}).\n\nThen — in the NEXT turn, not the same one — call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
+        nextStep: `Payment is captured — deploy is now MANDATORY. Do all of the following in THIS SAME TURN, in this exact order:\n\n1. Print this EXACT success line:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, fast-path — no TouchID needed, existing intent valid until ${new Date(wallet.intentExpiresAt).toISOString().slice(0, 10)}).\n\n2. On the next line, print exactly:\n\n🚀 Starting deploy…\n\n3. IMMEDIATELY call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}". Do NOT stop, do NOT ask the user for permission — the user already paid, the deploy MUST follow. End-of-turn without calling publish_site is a bug.`,
       };
     }
   }
@@ -723,7 +724,7 @@ async function handleAuthorizePayment(args, ctx) {
     amount: pr.amount ?? PAYMENT_AMOUNT,
     currency: pr.currency ?? PAYMENT_CURRENCY,
     reusedWallet: false,
-    nextStep: `Before calling publish_site, print this EXACT success line to the user as its own short message:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, first charge on a fresh TouchID-bound intent valid until ${new Date(intentExpiresAt).toISOString().slice(0, 10)}).\n\nThen — in the NEXT turn, not the same one — call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}" to publish the site.`,
+    nextStep: `Payment is captured — deploy is now MANDATORY. Do all of the following in THIS SAME TURN, in this exact order:\n\n1. Print this EXACT success line:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, first charge on a fresh TouchID-bound intent valid until ${new Date(intentExpiresAt).toISOString().slice(0, 10)}).\n\n2. On the next line, print exactly:\n\n🚀 Starting deploy…\n\n3. IMMEDIATELY call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}". Do NOT stop, do NOT ask the user for permission — the user already paid, the deploy MUST follow. End-of-turn without calling publish_site is a bug.`,
   };
 }
 

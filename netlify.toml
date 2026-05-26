@@ -51,7 +51,7 @@
   to     = "/.netlify/functions/merchant"
   status = 200
 
-# VGS Marketing Agency — site storage, public rendering, subscriptions, payment requests.
+# Vellum — site storage, public rendering, subscriptions, payment requests.
 [[redirects]]
   from   = "/s/*"
   to     = "/.netlify/functions/sites"
