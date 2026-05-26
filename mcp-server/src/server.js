@@ -226,6 +226,7 @@ export function createMcpServer(options) {
     appBaseUrl,
     requestStore,
     openBrowser = () => false,
+    openPreview = openBrowser,
     fetchImpl = fetch,
     buyerId: defaultBuyerId = "demo-buyer",
     consumerEmail: defaultConsumerEmail = "user@example.com",
@@ -246,6 +247,7 @@ export function createMcpServer(options) {
     appBaseUrl: browserAppBaseUrl,
     requestStore,
     openBrowser,
+    openPreview,
     fetchImpl,
     defaultBuyerId,
     defaultConsumerEmail,
@@ -402,14 +404,14 @@ async function handleRenderMarketingSite(args, ctx) {
   const siteId = createId("site").replace("site_", "s").slice(0, 8);
 
   if (ctx.localPreview) {
-    // Local mode (stdio): write HTML to disk. Desktop clients may also open it
-    // via openBrowser(); Codex CLI mode leaves it as an explicit file:// URL.
+    // Local mode (stdio): write HTML to disk and use the preview opener.
+    // Codex CLI can enable preview opening while keeping payment handoffs as URLs.
     const localDir = joinPath(tmpdir(), "vellum");
     await mkdir(localDir, { recursive: true });
     const localPath = joinPath(localDir, `${siteId}.html`);
     await writeFile(localPath, html);
     const previewUrl = pathToFileURL(localPath).href;
-    const opened = ctx.openBrowser(previewUrl);
+    const opened = ctx.openPreview(previewUrl);
     return {
       status: "preview",
       siteId,

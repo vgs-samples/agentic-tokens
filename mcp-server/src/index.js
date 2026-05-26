@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // stdio entry point — runs locally and talks to a backend over /api/*.
-// Desktop clients can auto-open browser handoffs. Codex CLI mode returns URLs
-// instead, so the user can open them manually and the agent can resume later.
+// Desktop clients can auto-open browser handoffs. Codex CLI mode can still
+// open local previews, but returns payment/browser-flow URLs so the user can
+// complete them manually and the agent can resume later.
 
 import { spawn, spawnSync } from "node:child_process";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -17,6 +18,9 @@ const apiBaseUrl = normalizeBaseUrl(process.env.AGENTIC_API_BASE_URL || `${appBa
 const openBrowserEnabled = process.env.AGENTIC_OPEN_BROWSER === undefined
   ? !codexCliMode
   : process.env.AGENTIC_OPEN_BROWSER !== "false";
+const openPreviewEnabled = process.env.AGENTIC_OPEN_PREVIEW === undefined
+  ? true
+  : process.env.AGENTIC_OPEN_PREVIEW !== "false";
 const waitForBrowser = process.env.AGENTIC_WAIT_FOR_BROWSER === undefined
   ? !codexCliMode
   : process.env.AGENTIC_WAIT_FOR_BROWSER !== "false";
@@ -30,15 +34,16 @@ const server = createMcpServer({
   apiBaseUrl,
   appBaseUrl,
   requestStore: new InMemoryRequestStore(),
-  openBrowser: (url) => openBrowser(url),
+  openBrowser: (url) => openUrl(url, openBrowserEnabled),
+  openPreview: (url) => openUrl(url, openPreviewEnabled),
   buyerId: process.env.AGENTIC_BUYER_ID,
   consumerEmail: process.env.AGENTIC_CONSUMER_EMAIL,
   environment: process.env.AGENTIC_ENVIRONMENT,
   waitForBrowser,
   waitMs: parseInt(process.env.AGENTIC_BROWSER_WAIT_MS, 10) || undefined,
   pollMs: parseInt(process.env.AGENTIC_POLL_MS, 10) || undefined,
-  // Stdio mode defaults to local preview. Render writes HTML to /tmp; desktop
-  // clients also open it when AGENTIC_OPEN_BROWSER is enabled. Set
+  // Stdio mode defaults to local preview. Render writes HTML to /tmp and opens
+  // it when AGENTIC_OPEN_PREVIEW is enabled. Set
   // AGENTIC_LOCAL_PREVIEW=false to fall back to the HTTP-style behavior
   // (store on the backend, return previewUrl).
   localPreview: process.env.AGENTIC_LOCAL_PREVIEW !== "false",
@@ -47,8 +52,8 @@ const server = createMcpServer({
 
 await server.connect(new StdioServerTransport());
 
-function openBrowser(url) {
-  if (!openBrowserEnabled) return false;
+function openUrl(url, enabled) {
+  if (!enabled) return false;
   const platform = process.platform;
   let command;
   let args;

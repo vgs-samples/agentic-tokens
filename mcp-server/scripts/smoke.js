@@ -88,6 +88,7 @@ const child = spawn(process.execPath, ["src/index.js"], {
   env: {
     ...process.env,
     AGENTIC_CLIENT_MODE: "codex-cli",
+    AGENTIC_OPEN_PREVIEW: "false",
     AGENTIC_APP_BASE_URL: baseUrl,
     AGENTIC_API_BASE_URL: `${baseUrl}/api`,
   },

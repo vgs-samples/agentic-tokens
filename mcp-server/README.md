@@ -146,7 +146,7 @@ Point `AGENTIC_APP_BASE_URL` at your deployed site so the sites/payment endpoint
 
 Codex CLI should run the stdio server in URL-handoff mode. In this mode the server:
 
-- writes rendered previews to `/tmp/vellum/*.html` and returns a `file://` URL;
+- writes rendered previews to `/tmp/vellum/*.html`, opens the preview when possible, and returns a `file://` URL;
 - returns collect / binding URLs instead of trying to open a GUI browser;
 - does not block inside `authorize_payment` while waiting for the user to finish a browser step.
 
@@ -203,6 +203,7 @@ All optional, set in the MCP client's `env` block.
 | `AGENTIC_CONSUMER_EMAIL` | `user@example.com` | Email used for token enrollment / OTP. |
 | `AGENTIC_ENVIRONMENT` | `sandbox` | Passed through to the binding page. |
 | `AGENTIC_OPEN_BROWSER` | `true` desktop, `false` Codex CLI | Set `false` to return URLs without opening a browser. |
+| `AGENTIC_OPEN_PREVIEW` | `true` | Set `false` to write preview files without opening them. |
 | `AGENTIC_WAIT_FOR_BROWSER` | `true` desktop, `false` Codex CLI | Set `false` to return `waiting_for_*` statuses immediately instead of polling for browser completion. |
 | `AGENTIC_LOCAL_PREVIEW` | `true` | Set `false` to store previews on the backend and return `/preview/<siteId>` plus `artifactHtml`. |
 | `AGENTIC_BROWSER_APP` | auto | macOS app name for `open -a`. |
