@@ -121,6 +121,8 @@ You should get back `serverInfo.name = "vellum"`.
 
 ### stdio — local install
 
+Desktop MCP clients can use the default stdio entrypoint. It may open browser tabs for preview, card collection, and device binding.
+
 ```bash
 claude mcp add vellum node /absolute/path/to/agentic-tokens/mcp-server/src/index.js
 ```
@@ -141,7 +143,33 @@ Or via `.mcp.json`:
 }
 ```
 
-The stdio variant auto-opens browser tabs at the right moments (Cmd+Click on macOS opens via `open <url>`). Point `AGENTIC_APP_BASE_URL` at your deployed site so the sites/subscriptions endpoints exist.
+Point `AGENTIC_APP_BASE_URL` at your deployed site so the sites/payment endpoints exist.
+
+### Codex CLI — local install
+
+Codex CLI should run the stdio server in URL-handoff mode. In this mode the server:
+
+- writes rendered previews to `/tmp/vellum/*.html` and returns a `file://` URL;
+- returns collect / binding URLs instead of trying to open a GUI browser;
+- does not block inside `authorize_payment` while waiting for the user to finish a browser step.
+
+Example `~/.codex/config.toml` entry:
+
+```toml
+[mcp_servers.vellum]
+command = "npm"
+args = ["run", "mcp:codex", "--silent"]
+cwd = "/absolute/path/to/agentic-tokens"
+
+[mcp_servers.vellum.env]
+AGENTIC_APP_BASE_URL = "https://vgs-agentic-tokens.netlify.app"
+```
+
+Equivalent direct command:
+
+```bash
+AGENTIC_CLIENT_MODE=codex-cli node /absolute/path/to/agentic-tokens/mcp-server/src/index.js
+```
 
 ## Configuration
 
@@ -149,12 +177,15 @@ All optional, set in the MCP client's `env` block.
 
 | Env var | Default | Description |
 |---|---:|---|
+| `AGENTIC_CLIENT_MODE` | `desktop` | Set `codex-cli` for Codex CLI URL-handoff mode. |
 | `AGENTIC_APP_BASE_URL` | `https://localhost:4200` | Browser URL for the React app and the public `/s/:id` endpoint. |
 | `AGENTIC_API_BASE_URL` | `${AGENTIC_APP_BASE_URL}/api` | API base used by the MCP server. |
 | `AGENTIC_BUYER_ID` | `demo-buyer` | Mock merchant buyer id. |
 | `AGENTIC_CONSUMER_EMAIL` | `user@example.com` | Email used for token enrollment / OTP. |
 | `AGENTIC_ENVIRONMENT` | `sandbox` | Passed through to the binding page. |
-| `AGENTIC_OPEN_BROWSER` | `true` | Set `false` to return URLs without opening a browser. |
+| `AGENTIC_OPEN_BROWSER` | `true` desktop, `false` Codex CLI | Set `false` to return URLs without opening a browser. |
+| `AGENTIC_WAIT_FOR_BROWSER` | `true` desktop, `false` Codex CLI | Set `false` to return `waiting_for_*` statuses immediately instead of polling for browser completion. |
+| `AGENTIC_LOCAL_PREVIEW` | `true` | Set `false` to store previews on the backend and return `/preview/<siteId>` plus `artifactHtml`. |
 | `AGENTIC_BROWSER_APP` | auto | macOS app name for `open -a`. |
 | `AGENTIC_BROWSER_WAIT_MS` | `300000` | Max wait time for browser sessions. |
 | `AGENTIC_POLL_MS` | `1500` | Poll interval for browser sessions. |
@@ -166,4 +197,4 @@ cd mcp-server
 node scripts/smoke.js
 ```
 
-Spawns a mock backend on an ephemeral port and round-trips `initialize` + `tools/list` + `publish_site` (expecting `payment_required`) over stdio.
+Spawns a mock backend on an ephemeral port and round-trips `initialize` + `tools/list` + `render_marketing_site` + `publish_site` (expecting `payment_required`) over stdio in Codex CLI mode.

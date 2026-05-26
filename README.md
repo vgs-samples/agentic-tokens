@@ -88,6 +88,7 @@ The HTML is generated client-side by the LLM and only reaches the server after t
 Two transports ship together:
 
 - **HTTP** — deployed at `/mcp` via `netlify/functions/mcp.js`. Connect a remote MCP client to `https://<your-site>/mcp` — no local install.
-- **stdio** — `node mcp-server/src/index.js` for desktop MCP clients (Claude Desktop, Claude Code, Codex). Auto-opens browser tabs at the right moments.
+- **stdio** — `node mcp-server/src/index.js` for desktop MCP clients. Desktop mode can auto-open browser tabs at the right moments.
+- **Codex CLI stdio** — `npm run mcp:codex` starts the same MCP server with URL handoff: it writes local previews to `/tmp`, returns `file://` / browser URLs, and does not block waiting for GUI browser steps.
 
 See `mcp-server/README.md` for the demo script, the tool contract, and copy-paste configs.

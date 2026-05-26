@@ -130,7 +130,7 @@ const MAX_CRYPTOGRAM_ATTEMPTS = 6;
 // Server-level instructions surfaced to the MCP client at initialize time.
 // Clients (Claude Desktop, Cursor, etc.) include this in the model's context
 // whenever any tool from this server is referenced, so this is the right
-// place to mandate cross-tool workflow rules (artifact-first, payment auth)
+// place to mandate cross-tool workflow rules (preview-first, payment auth)
 // rather than repeating them inside every individual tool description.
 const SERVER_INSTRUCTIONS = `You are using Vellum — a service that builds and hosts marketing landing pages.
 
@@ -156,14 +156,15 @@ When the user asks you to make / build / generate a marketing site, follow this 
 
 1. **Generate a JSON params object** that fits the user's brief. The schema is enforced by render_marketing_site / publish_site. Required top-level keys: brand, themeColor, hero, stats (x4), about, why (6 features), prices (3 tiers), reviews (3 items), imageSeeds. Tailor every text field to the user's theme — company name, tagline, USPs, feature titles, price tiers, fake testimonial text + cities, etc. Pick a themeColor that matches the brand (e.g. emerald for eco, rose for food, sky for tech, amber for warmth). Pick descriptive picsum imageSeeds (e.g. "berry-farm-2024", "mountain-coffee-roastery").
 
-2. **Before calling the tool, write exactly ONE short prose sentence** describing the design in human terms. Example: "Drafting a landing page for **Acme Coffee Co** — premium beans, emerald theme." That single sentence is the ONLY thing the user should see about the params. Do not paste, summarize, enumerate, or otherwise echo the JSON in chat — the artifact preview is the canonical view, and the user does not want to read 200 lines of JSON. Then call **render_marketing_site** with the params object. It returns \`siteId\`, \`previewUrl\`, and \`artifactHtml\` (a 1-line <iframe> wrapper pointing at previewUrl).
+2. **Before calling the tool, write exactly ONE short prose sentence** describing the design in human terms. Example: "Drafting a landing page for **Acme Coffee Co** — premium beans, emerald theme." That single sentence is the ONLY thing the user should see about the params. Do not paste, summarize, enumerate, or otherwise echo the JSON in chat — the preview is the canonical view, and the user does not want to read 200 lines of JSON. Then call **render_marketing_site** with the params object. It returns \`siteId\` and \`previewUrl\`; HTTP-style previews also return \`artifactHtml\`, while local previews return \`previewPath\`.
 
 3. **Show the preview to the user using whichever inline mechanism your client supports**, in this priority order:
-   a. **You have a Write / file-creation tool (Claude Code, Cursor, similar IDE-style agents)**: write \`artifactHtml\` to a file (e.g. \`/tmp/preview-<siteId>.html\` or \`./preview.html\`). Your client's preview pane will render it automatically. This is the right path for Claude Code — DO NOT skip it just because the tool result mentions "artifact".
-   b. **You have an artifacts capability (Claude Desktop, Claude.ai web)**: create an artifact with type="text/html" whose body is \`artifactHtml\`. Claude opens it in the side panel.
-   c. **Neither is available**: paste \`previewUrl\` as a clickable link.
+   a. **Codex CLI / terminal client**: paste the returned \`previewUrl\` or \`previewPath\` and ask the user to open it manually. Do not claim a browser opened unless the tool result has \`opened=true\`.
+   b. **You have a Write / file-creation tool with a preview pane (Claude Code, Cursor, similar IDE-style agents)**: write \`artifactHtml\` to a file (e.g. \`/tmp/preview-<siteId>.html\` or \`./preview.html\`) when \`artifactHtml\` is present. Your client's preview pane will render it automatically.
+   c. **You have an artifacts capability (Claude Desktop, Claude.ai web)**: create an artifact with type="text/html" whose body is \`artifactHtml\`. Claude opens it in the side panel.
+   d. **Neither is available**: paste \`previewUrl\` as a clickable link.
 
-   "Create an artifact" is a generic instruction — translate it to your client's actual capability (Write+preview, antartifact tag, etc.). DO NOT paste raw HTML into chat as a code block; DO NOT just send the user a URL when Write/artifact is available.
+   "Create an artifact" is a generic instruction — translate it to your client's actual capability (Write+preview, antartifact tag, etc.). DO NOT paste raw HTML into chat as a code block.
 
 4. **Ask the user explicitly**: "Shall I publish this for $5?" — every published site is a one-time $5 charge. There is no subscription. The buyer's card is remembered for future publishes, but the charge runs every time.
    Wait for their reply. Do not call publish_site without explicit user confirmation.
@@ -193,9 +194,9 @@ When the user asks you to make / build / generate a marketing site, follow this 
 # Anti-patterns — do not do these:
 
 - **Do NOT write raw HTML.** The server renders everything from params. If you find yourself writing <!doctype html> or any HTML tags (other than the artifactHtml iframe wrapper), stop and call render_marketing_site instead.
-- **Do NOT echo the params JSON in chat** — not before the tool call, not after, not as a code block, not as a bullet list, not as a "here's what I'm building" summary of every field. One short prose sentence (step 2) is the whole user-visible description. The tool's arguments panel and the artifact preview cover the rest.
+- **Do NOT echo the params JSON in chat** — not before the tool call, not after, not as a code block, not as a bullet list, not as a "here's what I'm building" summary of every field. One short prose sentence (step 2) is the whole user-visible description. The tool's arguments panel and preview cover the rest.
 - **Do NOT write the params or HTML to a local file** (other than the artifactHtml iframe wrapper from step 3a). Pass params directly to the tool as JSON.
-- **Do NOT skip step 3 (the artifact).** The artifact IS how the user previews the page. Without it they can't see what they're about to pay for.
+- **Do NOT skip step 3 (the preview).** The preview is how the user reviews the page. Without it they can't see what they're about to pay for.
 - **Do NOT skip the Payment-successful line** at the end of step 6. That single message is the demo's proof — it shows amount, card last4, and cryptogram id. The whole point is making the per-charge cryptogram visible.
 - **Do NOT repeat payment details in the step-7 publish message.** Once Payment-successful was shown, the final "🚀 Published" line is just the URL. Don't restate the amount, card, or cryptogram id — it makes the transcript noisy.
 - **Do NOT batch Vellum tool calls in the same assistant turn.** Especially never \`authorize_payment\` + \`publish_site\` together. They depend on each other; running in parallel triggers retries and double-charges in the trace. One call per turn. Period. (See the "one tool call per turn" rule at the top of these instructions.)
@@ -203,6 +204,21 @@ When the user asks you to make / build / generate a marketing site, follow this 
 - **Do NOT reuse a paymentRequestId across sites.** Each site costs $5 and needs its own paymentRequestId. Reusing one fails with "already redeemed".
 - **Do NOT call publish_site before render_marketing_site.** The user must preview before paying.
 - **Do NOT mention "subscription" or "monthly".** This model is one-time-per-site. The wallet is just an authorization that lets us skip TouchID **while the intent is still valid** (i.e., before \`intentExpiresAt\`); it is not a flat-rate plan.`;
+
+function buildServerInstructions(clientMode) {
+  if (clientMode !== "codex-cli") return SERVER_INSTRUCTIONS;
+
+  return `${SERVER_INSTRUCTIONS}
+
+## Codex CLI mode
+
+This server is running for Codex CLI. Assume there is no in-app browser, no artifact panel, and no automatic GUI browser control.
+
+- After render_marketing_site returns, surface the returned previewUrl or previewPath directly to the user. If previewPath is present, it is already a local HTML preview written by the server.
+- Do not claim that a browser was opened unless the tool result says opened=true.
+- For waiting_for_card and waiting_for_authentication, paste the returned URL and ask the user to open it manually. After the user says they completed it, call authorize_payment again with the same paymentRequestId.
+- Do not block waiting for browser completion in Codex CLI. The server defaults to non-blocking URL handoff in this mode.`;
+}
 
 export function createMcpServer(options) {
   const {
@@ -218,6 +234,7 @@ export function createMcpServer(options) {
     waitMs = DEFAULT_WAIT_MS,
     pollMs = DEFAULT_POLL_MS,
     localPreview = false,
+    clientMode = "desktop",
   } = options;
 
   if (!apiBaseUrl) throw new Error("createMcpServer: apiBaseUrl is required");
@@ -237,9 +254,10 @@ export function createMcpServer(options) {
     waitMs,
     pollMs,
     localPreview,
+    clientMode,
   };
 
-  const server = new McpServer(SERVER_INFO, { instructions: SERVER_INSTRUCTIONS });
+  const server = new McpServer(SERVER_INFO, { instructions: buildServerInstructions(ctx.clientMode) });
 
   server.registerTool(
     "render_marketing_site",
@@ -247,7 +265,10 @@ export function createMcpServer(options) {
       title: "Render a marketing site preview",
       description: `Render a marketing landing page from a JSON \`params\` object. Stores the rendered HTML server-side as a preview (10-minute TTL) and returns \`{ siteId, previewUrl, artifactHtml }\`.
 
-The agent should then create a Claude Desktop artifact (type="text/html") whose body is the tiny \`artifactHtml\` iframe wrapper — Claude Desktop's artifact panel renders the iframe, which loads the full page from \`previewUrl\`.
+The agent should then show the preview using the best surface its client supports:
+- Codex CLI / terminal clients: paste the returned \`previewUrl\` or \`previewPath\` so the user can open it.
+- IDE-style clients with file preview: write the tiny \`artifactHtml\` iframe wrapper to a local HTML file.
+- Artifact-capable clients: create a text/html artifact whose body is \`artifactHtml\`.
 
 Use this BEFORE publish_site. The same params produce identical HTML, so previewing and publishing are deterministically the same page.
 
@@ -368,8 +389,8 @@ async function handleRenderMarketingSite(args, ctx) {
   const siteId = createId("site").replace("site_", "s").slice(0, 8);
 
   if (ctx.localPreview) {
-    // Local mode (stdio): write HTML to disk and open in the user's default
-    // browser via openBrowser(). No round-trip through Netlify for preview.
+    // Local mode (stdio): write HTML to disk. Desktop clients may also open it
+    // via openBrowser(); Codex CLI mode leaves it as an explicit file:// URL.
     const localDir = joinPath(tmpdir(), "vellum");
     await mkdir(localDir, { recursive: true });
     const localPath = joinPath(localDir, `${siteId}.html`);
@@ -384,8 +405,8 @@ async function handleRenderMarketingSite(args, ctx) {
       companyName,
       opened,
       nextStep: opened
-        ? `Preview opened locally in the user's default browser (${previewUrl}). Wait for them to review it, then ask "Publish for $5/month?" and call publish_site with the SAME params.`
-        : `Preview written to ${localPath}. Tell the user the file path or open ${previewUrl} manually. Then ask "Publish for $5/month?" and call publish_site with the SAME params.`,
+        ? `Preview opened locally in the user's default browser (${previewUrl}). Wait for them to review it, then ask "Publish for $${PAYMENT_AMOUNT}?" and call publish_site with the SAME params.`
+        : `Preview written to ${localPath}. Tell the user the file path or ask them to open ${previewUrl} manually. Then ask "Publish for $${PAYMENT_AMOUNT}?" and call publish_site with the SAME params.`,
     };
   }
 
@@ -406,11 +427,12 @@ async function handleRenderMarketingSite(args, ctx) {
     companyName,
     artifactHtml,
     nextStep: `Show this preview to the user inline, by whichever mechanism your client supports (priority order):
-1) If you have a Write / file-creation tool (Claude Code, Cursor): write artifactHtml to a file like /tmp/preview-${siteId}.html — your client's preview pane will render it automatically.
-2) If you have an artifacts capability (Claude Desktop): create an artifact with type="text/html" and artifactHtml as the body.
-3) Otherwise: include previewUrl as a clickable link.
+1) Codex CLI / terminal clients: include previewUrl as a clickable link and tell the user to open it manually.
+2) If you have a Write / file-creation tool with a preview pane (Claude Code, Cursor): write artifactHtml to a file like /tmp/preview-${siteId}.html — your client's preview pane will render it automatically.
+3) If you have an artifacts capability (Claude Desktop): create an artifact with type="text/html" and artifactHtml as the body.
+4) Otherwise: include previewUrl as a clickable link.
 
-Do NOT paste raw HTML in chat as a code block. After the user reviews, ask "Publish for $5/month?" and call publish_site with the SAME params.`,
+Do NOT paste raw HTML in chat as a code block. After the user reviews, ask "Publish for $${PAYMENT_AMOUNT}?" and call publish_site with the SAME params.`,
   };
 }
 
@@ -1082,6 +1104,26 @@ function formatToolText(name, result) {
 }
 
 function formatRenderSite(result) {
+  if (result.previewPath) {
+    return [
+      `🎨 Site rendered for **${result.companyName ?? "your site"}** — siteId \`${result.siteId}\``,
+      ``,
+      result.opened
+        ? `Preview opened in the user's browser.`
+        : `Preview was written locally. In CLI environments, show this path/URL to the user instead of claiming the browser opened.`,
+      ``,
+      "| | |",
+      "|---|---|",
+      `| Preview file | \`${result.previewPath}\` |`,
+      `| Preview URL | ${result.previewUrl} |`,
+      `| Browser opened | ${result.opened ? "yes" : "no"} |`,
+      ``,
+      `After the user reviews it, ask: "Publish for $${PAYMENT_AMOUNT}?" Wait for explicit yes before calling publish_site.`,
+      ``,
+      `_${result.nextStep}_`,
+    ].join("\n");
+  }
+
   // Directive in position 1: the model reads tool results before composing its
   // reply, so this is where to put environment-aware guidance about how to
   // surface the preview to the user.
@@ -1090,11 +1132,12 @@ function formatRenderSite(result) {
     ``,
     `**To show this preview to the user, pick the path that matches your environment (in priority order):**`,
     ``,
-    `1. **Claude Code / Cursor / IDE-style clients with a Write tool**: write the \`artifactHtml\` string to a file in your workspace (e.g. \`/tmp/preview-${result.siteId}.html\` or \`./preview.html\`), then briefly mention the file path. The client's preview pane will render it automatically.`,
-    `2. **Claude Desktop / Claude.ai web (artifacts capability)**: create an artifact with type="text/html" whose body is the \`artifactHtml\` string. Claude will open it in the side panel.`,
-    `3. **No Write, no artifacts**: paste \`${result.previewUrl}\` as a clickable link in your reply — the user can open it in a browser tab.`,
+    `1. **Codex CLI / terminal clients**: paste \`${result.previewUrl}\` as a clickable link and ask the user to open it manually.`,
+    `2. **Claude Code / Cursor / IDE-style clients with a preview pane**: write the \`artifactHtml\` string to a file in your workspace (e.g. \`/tmp/preview-${result.siteId}.html\` or \`./preview.html\`), then briefly mention the file path.`,
+    `3. **Claude Desktop / Claude.ai web (artifacts capability)**: create an artifact with type="text/html" whose body is the \`artifactHtml\` string. Claude will open it in the side panel.`,
+    `4. **No Write, no artifacts**: paste \`${result.previewUrl}\` as a clickable link in your reply — the user can open it in a browser tab.`,
     ``,
-    `Do NOT paste raw HTML into chat as a code block — that's the worst UX. After showing the preview, ask: "Publish for $5/month?" Wait for explicit yes before calling publish_site.`,
+    `Do NOT paste raw HTML into chat as a code block — that's the worst UX. After showing the preview, ask: "Publish for $${PAYMENT_AMOUNT}?" Wait for explicit yes before calling publish_site.`,
     ``,
     `Preview URL (always available as a fallback): ${result.previewUrl}`,
   ].join("\n");

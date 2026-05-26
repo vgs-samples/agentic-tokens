@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
+    "start:codex": "AGENTIC_CLIENT_MODE=codex-cli node src/index.js",
     "smoke": "node scripts/smoke.js"
   },
   "dependencies": {

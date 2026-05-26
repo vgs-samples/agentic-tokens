@@ -8,6 +8,7 @@
   },
   "scripts": {
     "mcp": "node mcp-server/src/index.js",
+    "mcp:codex": "AGENTIC_CLIENT_MODE=codex-cli node mcp-server/src/index.js",
     "mcp:smoke": "node mcp-server/scripts/smoke.js"
   },
   "dependencies": {

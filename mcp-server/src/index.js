@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // stdio entry point — runs locally and talks to a backend over /api/*.
-// Browser handoffs (Collect / Visa binding) auto-open on the user's machine.
+// Desktop clients can auto-open browser handoffs. Codex CLI mode returns URLs
+// instead, so the user can open them manually and the agent can resume later.
 
 import { spawn, spawnSync } from "node:child_process";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -8,9 +9,17 @@ import { createMcpServer, InMemoryRequestStore } from "./server.js";
 
 const DEFAULT_APP_BASE_URL = "https://localhost:4200";
 
+const clientMode = (process.env.AGENTIC_CLIENT_MODE || "").toLowerCase();
+const codexCliMode = ["codex", "codex-cli", "codex_cli"].includes(clientMode)
+  || process.env.CODEX_CLI === "true";
 const appBaseUrl = normalizeBaseUrl(process.env.AGENTIC_APP_BASE_URL || DEFAULT_APP_BASE_URL);
 const apiBaseUrl = normalizeBaseUrl(process.env.AGENTIC_API_BASE_URL || `${appBaseUrl}/api`);
-const openBrowserEnabled = process.env.AGENTIC_OPEN_BROWSER !== "false";
+const openBrowserEnabled = process.env.AGENTIC_OPEN_BROWSER === undefined
+  ? !codexCliMode
+  : process.env.AGENTIC_OPEN_BROWSER !== "false";
+const waitForBrowser = process.env.AGENTIC_WAIT_FOR_BROWSER === undefined
+  ? !codexCliMode
+  : process.env.AGENTIC_WAIT_FOR_BROWSER !== "false";
 const browserApp = process.env.AGENTIC_BROWSER_APP || defaultBrowserOverride();
 
 if (/^https:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/.test(appBaseUrl)) {
@@ -25,13 +34,15 @@ const server = createMcpServer({
   buyerId: process.env.AGENTIC_BUYER_ID,
   consumerEmail: process.env.AGENTIC_CONSUMER_EMAIL,
   environment: process.env.AGENTIC_ENVIRONMENT,
-  waitForBrowser: true,
+  waitForBrowser,
   waitMs: parseInt(process.env.AGENTIC_BROWSER_WAIT_MS, 10) || undefined,
   pollMs: parseInt(process.env.AGENTIC_POLL_MS, 10) || undefined,
-  // Stdio mode defaults to local preview — render writes HTML to /tmp and opens
-  // it in the user's default browser. Set AGENTIC_LOCAL_PREVIEW=false to fall
-  // back to the HTTP-style behavior (store on the backend, return previewUrl).
+  // Stdio mode defaults to local preview. Render writes HTML to /tmp; desktop
+  // clients also open it when AGENTIC_OPEN_BROWSER is enabled. Set
+  // AGENTIC_LOCAL_PREVIEW=false to fall back to the HTTP-style behavior
+  // (store on the backend, return previewUrl).
   localPreview: process.env.AGENTIC_LOCAL_PREVIEW !== "false",
+  clientMode: codexCliMode ? "codex-cli" : (clientMode || "desktop"),
 });
 
 await server.connect(new StdioServerTransport());

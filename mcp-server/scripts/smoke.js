@@ -87,8 +87,7 @@ const child = spawn(process.execPath, ["src/index.js"], {
   cwd: new URL("..", import.meta.url),
   env: {
     ...process.env,
-    AGENTIC_OPEN_BROWSER: "false",
-    AGENTIC_LOCAL_PREVIEW: "false", // exercise the HTTP-style path; we mock /api/sites
+    AGENTIC_CLIENT_MODE: "codex-cli",
     AGENTIC_APP_BASE_URL: baseUrl,
     AGENTIC_API_BASE_URL: `${baseUrl}/api`,
   },
@@ -181,15 +180,21 @@ const sampleParams = {
 
 send({
   jsonrpc: "2.0", id: 3, method: "tools/call",
+  params: { name: "render_marketing_site", arguments: { params: sampleParams } },
+});
+
+send({
+  jsonrpc: "2.0", id: 4, method: "tools/call",
   params: { name: "publish_site", arguments: { params: sampleParams } },
 });
 
-await waitFor(() => messages.find((m) => m.id === 3), 4000);
+await waitFor(() => messages.find((m) => m.id === 4), 4000);
 child.kill();
 backend.close();
 
 const tools = messages.find((m) => m.id === 2);
-const publishResult = messages.find((m) => m.id === 3);
+const renderResult = messages.find((m) => m.id === 3);
+const publishResult = messages.find((m) => m.id === 4);
 
 const expectedTools = [
   "render_marketing_site", "publish_site", "authorize_payment",
@@ -201,6 +206,9 @@ const missing = expectedTools.filter((t) => !gotTools?.includes(t));
 if (
   !messages.find((m) => m.id === 1)?.result?.serverInfo
   || missing.length > 0
+  || renderResult?.result?.structuredContent?.status !== "preview"
+  || !renderResult?.result?.structuredContent?.previewPath
+  || renderResult?.result?.structuredContent?.opened !== false
   || publishResult?.result?.structuredContent?.status !== "payment_required"
   || !publishResult?.result?.structuredContent?.paymentRequestId
 ) {
