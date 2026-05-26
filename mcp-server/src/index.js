@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // stdio entry point — runs locally and talks to a backend over /api/*.
-// Desktop clients can auto-open browser handoffs. Codex CLI mode can still
-// open local previews, but returns payment/browser-flow URLs so the user can
-// complete them manually and the agent can resume later.
+// Desktop and Codex CLI clients can auto-open browser handoffs. Codex CLI mode
+// still returns payment/browser-flow URLs immediately so the user can complete
+// them manually and the agent can resume later without holding a tool call open.
 
 import { spawn, spawnSync } from "node:child_process";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -16,7 +16,7 @@ const codexCliMode = ["codex", "codex-cli", "codex_cli"].includes(clientMode)
 const appBaseUrl = normalizeBaseUrl(process.env.AGENTIC_APP_BASE_URL || DEFAULT_APP_BASE_URL);
 const apiBaseUrl = normalizeBaseUrl(process.env.AGENTIC_API_BASE_URL || `${appBaseUrl}/api`);
 const openBrowserEnabled = process.env.AGENTIC_OPEN_BROWSER === undefined
-  ? !codexCliMode
+  ? true
   : process.env.AGENTIC_OPEN_BROWSER !== "false";
 const openPreviewEnabled = process.env.AGENTIC_OPEN_PREVIEW === undefined
   ? true

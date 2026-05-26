@@ -159,7 +159,7 @@ When the user asks you to make / build / generate a marketing site, follow this 
 2. **Before calling the tool, write exactly ONE short prose sentence** describing the design in human terms. Example: "Drafting a landing page for **Acme Coffee Co** — premium beans, emerald theme." That single sentence is the ONLY thing the user should see about the params. Do not paste, summarize, enumerate, or otherwise echo the JSON in chat — the preview is the canonical view, and the user does not want to read 200 lines of JSON. Then call **create_marketing_site** with the params object. \`render_marketing_site\` is kept as a backward-compatible alias for the same preview step. Both return \`siteId\` and \`previewUrl\`; HTTP-style previews also return \`artifactHtml\`, while local previews return \`previewPath\`.
 
 3. **Show the preview to the user using whichever inline mechanism your client supports**, in this priority order:
-   a. **Codex CLI / terminal client**: paste the returned \`previewUrl\` or \`previewPath\` and ask the user to open it manually. Do not claim a browser opened unless the tool result has \`opened=true\`.
+   a. **Codex CLI / terminal client**: paste the returned \`previewUrl\` or \`previewPath\`. If the tool result has \`opened=true\`, say the preview opened; otherwise ask the user to open it manually.
    b. **You have a Write / file-creation tool with a preview pane (Claude Code, Cursor, similar IDE-style agents)**: write \`artifactHtml\` to a file (e.g. \`/tmp/preview-<siteId>.html\` or \`./preview.html\`) when \`artifactHtml\` is present. Your client's preview pane will render it automatically.
    c. **You have an artifacts capability (Claude Desktop, Claude.ai web)**: create an artifact with type="text/html" whose body is \`artifactHtml\`. Claude opens it in the side panel.
    d. **Neither is available**: paste \`previewUrl\` as a clickable link.
@@ -212,11 +212,12 @@ function buildServerInstructions(clientMode) {
 
 ## Codex CLI mode
 
-This server is running for Codex CLI. Assume there is no in-app browser, no artifact panel, and no automatic GUI browser control.
+This server is running for Codex CLI. Assume there is no in-app browser and no artifact panel. The local MCP server may auto-open the system browser for previews, card collection, and TouchID/passkey authentication, but the assistant must still surface the URL.
 
-- After render_marketing_site returns, surface the returned previewUrl or previewPath directly to the user. If previewPath is present, it is already a local HTML preview written by the server.
+- After create_marketing_site/render_marketing_site returns, surface the returned previewUrl or previewPath directly to the user. If previewPath is present, it is already a local HTML preview written by the server.
 - Do not claim that a browser was opened unless the tool result says opened=true.
-- For waiting_for_card and waiting_for_authentication, paste the returned URL and ask the user to open it manually. After the user says they completed it, call authorize_payment again with the same paymentRequestId.
+- For waiting_for_card and waiting_for_authentication, paste the returned URL. If the tool result says opened=true, tell the user the browser was opened and ask them to complete the browser step there. If opened=false, ask them to open the URL manually. After the user says they completed it, call authorize_payment again with the same paymentRequestId.
+- Never pass waitForBrowser=true in Codex CLI. Let authorize_payment return waiting_for_card / waiting_for_authentication immediately, then resume after the user completes the opened browser step.
 - Do not block waiting for browser completion in Codex CLI. The server defaults to non-blocking URL handoff in this mode.`;
 }
 
@@ -264,7 +265,7 @@ export function createMcpServer(options) {
   const previewToolDescription = `Create a marketing landing page preview from a JSON \`params\` object. Use this when the user asks to create, build, make, draft, or generate a marketing website, landing page, or promo site. The server renders the page from a fixed polished template and returns \`{ siteId, previewUrl }\`; local stdio previews also return \`previewPath\`, and HTTP-style previews also return \`artifactHtml\`.
 
 The agent should then show the preview using the best surface its client supports:
-- Codex CLI / terminal clients: paste the returned \`previewUrl\` or \`previewPath\` so the user can open it.
+- Codex CLI / terminal clients: paste the returned \`previewUrl\` or \`previewPath\`; if \`opened=true\`, say the browser was opened.
 - IDE-style clients with file preview: write the tiny \`artifactHtml\` iframe wrapper to a local HTML file.
 - Artifact-capable clients: create a text/html artifact whose body is \`artifactHtml\`.
 
@@ -330,7 +331,7 @@ Fast path: if the buyer already has a TouchID-bound intent that is still within 
         useExistingCard: z.boolean().optional().describe("Set false to force a fresh card collection. Also forces the slow path (new wallet, new TouchID). Defaults to true."),
         forceNewWallet: z.boolean().optional().describe("Set true to bypass the existing wallet and force a fresh TouchID + new intent, even if the current wallet has charges left. Defaults to false."),
         consumerEmail: z.string().optional().describe("Consumer email used for token enrollment and OTP (slow path only)."),
-        waitForBrowser: z.boolean().optional().describe("If true (default in stdio mode), block until the browser steps finish. If false (default in HTTP mode), return waiting state immediately and resume by calling again with the same paymentRequestId."),
+        waitForBrowser: z.boolean().optional().describe("If true, block until browser steps finish. In Codex CLI, leave this false/omitted so the tool returns waiting_for_card or waiting_for_authentication immediately; then resume by calling again with the same paymentRequestId after the user completes the opened browser step."),
       },
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -442,7 +443,7 @@ async function handleRenderMarketingSite(args, ctx) {
     companyName,
     artifactHtml,
     nextStep: `Show this preview to the user inline, by whichever mechanism your client supports (priority order):
-1) Codex CLI / terminal clients: include previewUrl as a clickable link and tell the user to open it manually.
+1) Codex CLI / terminal clients: include previewUrl as a clickable link; if the tool says opened=true, tell the user the browser was opened.
 2) If you have a Write / file-creation tool with a preview pane (Claude Code, Cursor): write artifactHtml to a file like /tmp/preview-${siteId}.html — your client's preview pane will render it automatically.
 3) If you have an artifacts capability (Claude Desktop): create an artifact with type="text/html" and artifactHtml as the body.
 4) Otherwise: include previewUrl as a clickable link.
@@ -561,7 +562,9 @@ async function handleAuthorizePayment(args, ctx) {
 
   const buyerId = pr.buyerId || ctx.defaultBuyerId;
   const consumerEmail = args.consumerEmail || ctx.defaultConsumerEmail;
-  const waitForBrowser = args.waitForBrowser ?? ctx.defaultWaitForBrowser;
+  const waitForBrowser = ctx.clientMode === "codex-cli"
+    ? false
+    : (args.waitForBrowser ?? ctx.defaultWaitForBrowser);
 
   // Load flow state early — we may be resuming a waiting_for_cryptogram poll
   // (or any other waiting_for_* state). State survives between non-blocking
@@ -611,7 +614,10 @@ async function handleAuthorizePayment(args, ctx) {
     if (!cardSession) {
       flow.status = "waiting_for_card";
       await ctx.requestStore.set(paymentRequestId, flow);
-      return waitingResponse("waiting_for_card", paymentRequestId, collect, null, "Open the collect URL and save a card.");
+      return waitingResponse("waiting_for_card", paymentRequestId, collect, null,
+        collect.opened
+          ? "Complete the opened card form and save a card."
+          : "Open the collect URL and save a card.");
     }
     cardId = cardSession.cardId;
     if (!cardId) throw new Error("Card collection completed without cardId.");
@@ -632,7 +638,9 @@ async function handleAuthorizePayment(args, ctx) {
       flow.status = "waiting_for_card";
       await ctx.requestStore.set(paymentRequestId, flow);
       return waitingResponse("waiting_for_card", paymentRequestId, collect, null,
-        "Open the collect URL, save a card, then call authorize_payment again.");
+        opened
+          ? "Complete the opened card form, save a card, then call authorize_payment again."
+          : "Open the collect URL, save a card, then call authorize_payment again.");
     }
     const cardSession = await waitForSession(ctx, sessionId, ctx.waitMs);
     cardId = cardSession.cardId;
@@ -658,7 +666,9 @@ async function handleAuthorizePayment(args, ctx) {
       flow.status = "waiting_for_authentication";
       await ctx.requestStore.set(paymentRequestId, flow);
       return waitingResponse("waiting_for_authentication", paymentRequestId, collect, binding,
-        "Open the binding URL and complete TouchID / passkey authentication.");
+        binding.opened
+          ? "Complete TouchID / passkey authentication in the opened browser tab."
+          : "Open the binding URL and complete TouchID / passkey authentication.");
     }
     assuranceData = bindingSession.assuranceData;
     if (!assuranceData) throw new Error("Device authentication completed without assuranceData.");
@@ -692,7 +702,9 @@ async function handleAuthorizePayment(args, ctx) {
     flow.tokenId = tokenId;
     await ctx.requestStore.set(paymentRequestId, flow);
     return waitingResponse("waiting_for_authentication", paymentRequestId, collect, binding,
-      "Open the binding URL, complete TouchID / passkey authentication, then call authorize_payment again.");
+      binding.opened
+        ? "Complete TouchID / passkey authentication in the opened browser tab, then call authorize_payment again."
+        : "Open the binding URL, complete TouchID / passkey authentication, then call authorize_payment again.");
   }
 
   if (!assuranceData) {
@@ -1147,7 +1159,7 @@ function formatRenderSite(result) {
     ``,
     `**To show this preview to the user, pick the path that matches your environment (in priority order):**`,
     ``,
-    `1. **Codex CLI / terminal clients**: paste \`${result.previewUrl}\` as a clickable link and ask the user to open it manually.`,
+    `1. **Codex CLI / terminal clients**: paste \`${result.previewUrl}\` as a clickable link; if the tool says \`opened=true\`, tell the user the browser was opened.`,
     `2. **Claude Code / Cursor / IDE-style clients with a preview pane**: write the \`artifactHtml\` string to a file in your workspace (e.g. \`/tmp/preview-${result.siteId}.html\` or \`./preview.html\`), then briefly mention the file path.`,
     `3. **Claude Desktop / Claude.ai web (artifacts capability)**: create an artifact with type="text/html" whose body is the \`artifactHtml\` string. Claude will open it in the side panel.`,
     `4. **No Write, no artifacts**: paste \`${result.previewUrl}\` as a clickable link in your reply — the user can open it in a browser tab.`,
@@ -1218,13 +1230,16 @@ function formatAuthorizePayment(result) {
     return lines.join("\n");
   }
   if (result.status === "waiting_for_card" || result.status === "waiting_for_authentication") {
-    const url = result.collect?.url || result.binding?.url;
-    const action = result.status === "waiting_for_card"
-      ? "Open the card form in your browser:"
-      : "Complete device authentication (TouchID / passkey) in your browser:";
+    const handoff = result.collect || result.binding || {};
+    const url = handoff.url;
+    const browserLine = handoff.opened
+      ? "Browser opened. Complete this step there:"
+      : result.status === "waiting_for_card"
+        ? "Open the card form in your browser:"
+        : "Complete device authentication (TouchID / passkey) in your browser:";
     const niceStatus = result.status.replace(/_/g, " ");
     const msg = result.message ? `\n\n${result.message}` : "";
-    return `⏳ **${niceStatus}**\n\n${action}\n${url}${msg}`;
+    return `⏳ **${niceStatus}**\n\n${browserLine}\n${url}${msg}`;
   }
   if (result.status === "waiting_for_cryptogram") {
     const lines = [
