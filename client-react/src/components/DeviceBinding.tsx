@@ -76,11 +76,8 @@ export function DeviceBinding({ consumerEmail }: Props) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function showAuth(session: any) {
+    void session;
     setAuthVisible(true);
-    if (session?.iframe) {
-      session.iframe.width = 300;
-      session.iframe.height = 400;
-    }
   }
 
   async function handleRequestOtp() {

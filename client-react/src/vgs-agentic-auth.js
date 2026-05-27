@@ -239,8 +239,7 @@ class Session {
   }
 
   /**
-   * The library-managed iframe element.
-   * Useful for showing/hiding during the FIDO ceremony (e.g. iframe.width = 300).
+   * The library-managed hidden iframe element.
    * @type {HTMLIFrameElement}
    */
   get iframe() {
