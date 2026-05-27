@@ -67,7 +67,18 @@ const backend = createServer(async (req, res) => {
     if (req.method === "GET") {
       const pr = paymentRequests.get(id);
       if (!pr) return send(404, { error: "not found" });
+      if (pr.stalePendingReads > 0) {
+        paymentRequests.set(id, { ...pr, stalePendingReads: pr.stalePendingReads - 1 });
+        return send(200, { ...pr, status: "pending" });
+      }
       return send(200, pr);
+    }
+    if (req.method === "PUT") {
+      const pr = paymentRequests.get(id);
+      if (!pr) return send(404, { error: "not found" });
+      const updates = JSON.parse(body);
+      paymentRequests.set(id, { ...pr, ...updates });
+      return send(200, paymentRequests.get(id));
     }
   }
 
@@ -191,12 +202,32 @@ send({
 });
 
 await waitFor(() => messages.find((m) => m.id === 4), 4000);
+
+const firstPublishResult = messages.find((m) => m.id === 4);
+const paymentRequestId = firstPublishResult?.result?.structuredContent?.paymentRequestId;
+if (paymentRequestId) {
+  const pr = paymentRequests.get(paymentRequestId);
+  paymentRequests.set(paymentRequestId, {
+    ...pr,
+    status: "completed",
+    cryptogramId: "cg_smoke",
+    paymentCredential: { dpanLast4: "4242" },
+    stalePendingReads: 1,
+  });
+  send({
+    jsonrpc: "2.0", id: 5, method: "tools/call",
+    params: { name: "publish_site", arguments: { params: sampleParams, paymentRequestId } },
+  });
+  await waitFor(() => messages.find((m) => m.id === 5), 4000);
+}
+
 child.kill();
 backend.close();
 
 const tools = messages.find((m) => m.id === 2);
 const renderResult = messages.find((m) => m.id === 3);
 const publishResult = messages.find((m) => m.id === 4);
+const paidPublishResult = messages.find((m) => m.id === 5);
 
 const expectedTools = [
   "create_marketing_site", "render_marketing_site", "publish_site", "authorize_payment",
@@ -213,6 +244,8 @@ if (
   || renderResult?.result?.structuredContent?.opened !== false
   || publishResult?.result?.structuredContent?.status !== "payment_required"
   || !publishResult?.result?.structuredContent?.paymentRequestId
+  || paidPublishResult?.result?.structuredContent?.status !== "published"
+  || !paidPublishResult?.result?.structuredContent?.url
 ) {
   console.error("Smoke checks failed.");
   console.error("Missing tools:", missing);

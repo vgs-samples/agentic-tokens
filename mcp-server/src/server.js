@@ -127,6 +127,8 @@ const INTENT_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
 const CRYPTOGRAM_POLL_SECONDS = 5;
 const MAX_CRYPTOGRAM_ATTEMPTS = 6;
 const BROWSER_HANDOFF_POLL_SECONDS = 3;
+const PAYMENT_REQUEST_READ_RETRIES = 6;
+const PAYMENT_REQUEST_READ_DELAY_MS = 500;
 
 // Server-level instructions surfaced to the MCP client at initialize time.
 // Clients (Claude Desktop, Cursor, etc.) include this in the model's context
@@ -464,10 +466,13 @@ async function handlePublishSite(args, ctx) {
   // Path A — second call after authorize_payment: agent passes the
   // paymentRequestId, server validates the charge and publishes.
   if (args.paymentRequestId) {
-    const pr = await apiFetch(ctx, `/payment-requests/${encodeURIComponent(args.paymentRequestId)}`, { allow404: true });
+    const pr = await getPaymentRequestForPublish(ctx, args.paymentRequestId);
     if (!pr) throw new Error(`Unknown or expired paymentRequestId: ${args.paymentRequestId}.`);
     if (pr.status !== "completed") {
-      throw new Error(`paymentRequestId ${args.paymentRequestId} has status "${pr.status}", not "completed". Call authorize_payment first.`);
+      const pendingHint = pr.status === "pending"
+        ? " If authorize_payment just returned status=\"completed\", retry publish_site with the same params and paymentRequestId; do NOT call authorize_payment again."
+        : "";
+      throw new Error(`paymentRequestId ${args.paymentRequestId} has status "${pr.status}", not "completed". Call authorize_payment first unless the charge has already completed.${pendingHint}`);
     }
     if (pr.redeemed) {
       throw new Error(`paymentRequestId ${args.paymentRequestId} was already redeemed for a previous publish. Each published site costs $${PAYMENT_AMOUNT} — call publish_site again WITHOUT paymentRequestId to start a fresh payment.`);
@@ -542,6 +547,21 @@ async function handlePublishSite(args, ctx) {
     intentExpiresAt: intentExpiresAtIso,
     nextStep,
   };
+}
+
+// Netlify Blobs can briefly return the previous "pending" value right after
+// authorize_payment writes "completed". The agent publishes immediately after
+// payment success, so smooth over that read-after-write window here.
+async function getPaymentRequestForPublish(ctx, paymentRequestId) {
+  let last = null;
+  for (let attempt = 0; attempt < PAYMENT_REQUEST_READ_RETRIES; attempt += 1) {
+    last = await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, { allow404: true });
+    if (!last || last.status !== "pending") return last;
+    if (attempt < PAYMENT_REQUEST_READ_RETRIES - 1) {
+      await sleep(PAYMENT_REQUEST_READ_DELAY_MS);
+    }
+  }
+  return last;
 }
 
 async function handleAuthorizePayment(args, ctx) {
