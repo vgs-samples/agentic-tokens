@@ -9,6 +9,7 @@ import { createServer } from "node:http";
 const sites = new Map();
 const subscriptions = new Map();
 const paymentRequests = new Map();
+let transientTokenEnrollmentFailures = 1;
 
 const backend = createServer(async (req, res) => {
   let body = "";
@@ -85,6 +86,17 @@ const backend = createServer(async (req, res) => {
   // /api/merchant/cards/:buyerId — return no cards so the smoke flow doesn't run the binding step
   if (/^\/api\/merchant\/cards\/[^/]+$/.test(url.pathname) && req.method === "GET") {
     return send(200, { buyerId: url.pathname.split("/").pop(), cards: [] });
+  }
+
+  // /api/cards/:cardId/agentic-tokens — fail once like a transient socket/runtime
+  // interruption, then succeed so authorize_payment can resume on retry.
+  if (/^\/api\/cards\/[^/]+\/agentic-tokens$/.test(url.pathname) && req.method === "POST") {
+    if (transientTokenEnrollmentFailures > 0) {
+      transientTokenEnrollmentFailures -= 1;
+      req.socket.destroy();
+      return;
+    }
+    return send(200, { data: { id: "tok_smoke", type: "agentic_tokens" } });
   }
 
   send(404, { error: `mock backend has no route for ${req.method} ${url.pathname}` });
@@ -206,6 +218,18 @@ await waitFor(() => messages.find((m) => m.id === 4), 4000);
 const firstPublishResult = messages.find((m) => m.id === 4);
 const paymentRequestId = firstPublishResult?.result?.structuredContent?.paymentRequestId;
 if (paymentRequestId) {
+  send({
+    jsonrpc: "2.0", id: 5, method: "tools/call",
+    params: { name: "authorize_payment", arguments: { paymentRequestId, cardId: "CRD_smoke" } },
+  });
+  await waitFor(() => messages.find((m) => m.id === 5), 4000);
+
+  send({
+    jsonrpc: "2.0", id: 6, method: "tools/call",
+    params: { name: "authorize_payment", arguments: { paymentRequestId, cardId: "CRD_smoke" } },
+  });
+  await waitFor(() => messages.find((m) => m.id === 6), 4000);
+
   const pr = paymentRequests.get(paymentRequestId);
   paymentRequests.set(paymentRequestId, {
     ...pr,
@@ -215,10 +239,10 @@ if (paymentRequestId) {
     stalePendingReads: 1,
   });
   send({
-    jsonrpc: "2.0", id: 5, method: "tools/call",
+    jsonrpc: "2.0", id: 7, method: "tools/call",
     params: { name: "publish_site", arguments: { params: sampleParams, paymentRequestId } },
   });
-  await waitFor(() => messages.find((m) => m.id === 5), 4000);
+  await waitFor(() => messages.find((m) => m.id === 7), 4000);
 }
 
 child.kill();
@@ -227,7 +251,9 @@ backend.close();
 const tools = messages.find((m) => m.id === 2);
 const renderResult = messages.find((m) => m.id === 3);
 const publishResult = messages.find((m) => m.id === 4);
-const paidPublishResult = messages.find((m) => m.id === 5);
+const transientAuthResult = messages.find((m) => m.id === 5);
+const resumedAuthResult = messages.find((m) => m.id === 6);
+const paidPublishResult = messages.find((m) => m.id === 7);
 
 const expectedTools = [
   "create_marketing_site", "render_marketing_site", "publish_site", "authorize_payment",
@@ -244,6 +270,9 @@ if (
   || renderResult?.result?.structuredContent?.opened !== false
   || publishResult?.result?.structuredContent?.status !== "payment_required"
   || !publishResult?.result?.structuredContent?.paymentRequestId
+  || transientAuthResult?.result?.structuredContent?.status !== "pending"
+  || transientAuthResult?.result?.isError !== false
+  || resumedAuthResult?.result?.structuredContent?.status !== "waiting_for_authentication"
   || paidPublishResult?.result?.structuredContent?.status !== "published"
   || !paidPublishResult?.result?.structuredContent?.url
 ) {

@@ -129,6 +129,7 @@ const MAX_CRYPTOGRAM_ATTEMPTS = 6;
 const BROWSER_HANDOFF_POLL_SECONDS = 3;
 const PAYMENT_REQUEST_READ_RETRIES = 6;
 const PAYMENT_REQUEST_READ_DELAY_MS = 500;
+const TRANSIENT_AUTHORIZE_RETRY_SECONDS = 3;
 
 // Server-level instructions surfaced to the MCP client at initialize time.
 // Clients (Claude Desktop, Cursor, etc.) include this in the model's context
@@ -178,6 +179,7 @@ When the user asks you to make / build / generate a marketing site, follow this 
    - **\`savedCard\` set AND \`walletReady\` true**: a card is on file AND the TouchID-bound intent is still valid (today is before \`intentExpiresAt\`). Print the exact line from \`nextStep\` — "I see saved card: ... charging $5 for this site — using the existing intent valid until YYYY-MM-DD." — and immediately call **authorize_payment**. NO extra confirmation, NO TouchID prompt — the server reuses the existing intent and issues a brand-new one-time cryptogram for this $5.
    - **\`savedCard\` set AND \`walletReady\` false**: card on file, but no usable intent (first charge for this card, or the previous intent already expired). Print the saved-card line; mention that TouchID is required to create a new intent. Then call authorize_payment.
    - **\`savedCard\` null**: no card on file at all. Do NOT ask for confirmation again — the user already approved the $5 charge in step 4. Print "No card on file — opening card form." and IMMEDIATELY call authorize_payment. It will return status="waiting_for_card" with a URL; surface that URL to the user, then poll by calling authorize_payment again with the same paymentRequestId until the browser posts completion.
+   - If authorize_payment returns "pending", this is a recoverable infrastructure/network interruption, NOT a declined or failed payment. Print a short "still pending, retrying" line, wait for retryAfterSeconds, then call authorize_payment AGAIN with the same paymentRequestId.
    - If authorize_payment returns "waiting_for_card" or "waiting_for_authentication", surface the URL to the user, wait a few seconds, then call authorize_payment AGAIN with the same paymentRequestId. The browser page posts completion to /api/sessions/:id; the repeated authorize_payment call reads it automatically. Do NOT ask the user to say "done" before polling.
    - If authorize_payment returns "waiting_for_cryptogram", the VGS cryptogram is still being generated (this typically takes 5–15 seconds after intent creation). Print "⏳ Generating payment cryptogram…", wait ~5 seconds, then call authorize_payment AGAIN with the same paymentRequestId — no other arguments. Repeat until status="completed". Do NOT call publish_site or any other tool while polling.
    - When authorize_payment returns status="completed", **first print the explicit success line from \`nextStep\`** to the user as its own short message. The format is fixed:
@@ -327,7 +329,7 @@ Two-step flow:
 
 **CRITICAL — must be the only tool call in your reply.** Never invoke authorize_payment twice in the same reply (parallel calls open the TouchID iframe twice and force the user to authenticate twice). Never invoke it in parallel with publish_site either. Issue ONE call, wait for the result, then continue in your NEXT reply.
 
-Fast path: if the buyer already has a TouchID-bound intent that is still within its validity window (the "wallet" — date check, no count), this just issues a fresh one-time cryptogram from VGS — no card collection, no re-authentication. Slow path (no usable intent yet, or previous one expired): reuses the buyer's saved card if any (or opens a card collection page), triggers device authentication (TouchID / FIDO / OTP) in a browser tab, creates a VGS intent valid for ~1 year, then issues the first cryptogram. Either way, returns status='completed' with cryptogramId, masked paymentCredential, and intentExpiresAt. After completion, call publish_site again with the SAME params AND paymentRequestId to publish the site.`,
+Fast path: if the buyer already has a TouchID-bound intent that is still within its validity window (the "wallet" — date check, no count), this just issues a fresh one-time cryptogram from VGS — no card collection, no re-authentication. Slow path (no usable intent yet, or previous one expired): reuses the buyer's saved card if any (or opens a card collection page), triggers device authentication (TouchID / FIDO / OTP) in a browser tab, creates a VGS intent valid for ~1 year, then issues the first cryptogram. Transient backend/network interruptions return status='pending' and should be retried with the same paymentRequestId. Terminal errors return isError=true. On success, returns status='completed' with cryptogramId, masked paymentCredential, and intentExpiresAt. After completion, call publish_site again with the SAME params AND paymentRequestId to publish the site.`,
       inputSchema: {
         paymentRequestId: z.string().describe("Returned by publish_site when status=payment_required."),
         cardId: z.string().optional().describe("Explicit cardId to charge on slow path — pick from list_buyer_cards if there are multiple. Ignored on fast path (wallet already binds a card)."),
@@ -338,7 +340,7 @@ Fast path: if the buyer already has a TouchID-bound intent that is still within 
       },
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    (args) => wrapToolResult("authorize_payment", () => handleAuthorizePayment(args, ctx)),
+    (args) => wrapToolResult("authorize_payment", () => handleAuthorizePayment(args, ctx), args),
   );
 
   server.registerTool(
@@ -1088,19 +1090,75 @@ function sanitizeSurrogates(value) {
 
 async function apiFetch(ctx, path, { method = "GET", body, allow404 = false } = {}) {
   const url = `${ctx.apiBaseUrl}${path}`;
-  const response = await ctx.fetchImpl(url, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    ...(body ? { body: JSON.stringify(sanitizeSurrogates(body)) } : {}),
-  });
-  const text = await response.text();
+  let response;
+  try {
+    response = await ctx.fetchImpl(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      ...(body ? { body: JSON.stringify(sanitizeSurrogates(body)) } : {}),
+    });
+  } catch (err) {
+    throw new ApiFetchError(`${method} ${path} network failed: ${err.message}`, {
+      method,
+      path,
+      cause: err,
+      transient: isTransientNetworkError(err),
+    });
+  }
+
+  let text = "";
+  try {
+    text = await response.text();
+  } catch (err) {
+    throw new ApiFetchError(`${method} ${path} response read failed: ${err.message}`, {
+      method,
+      path,
+      status: response.status,
+      cause: err,
+      transient: true,
+    });
+  }
   let data = null;
   if (text) {
     try { data = JSON.parse(text); } catch { data = { raw: text }; }
   }
   if (allow404 && response.status === 404) return null;
-  if (!response.ok) throw new Error(`${method} ${url} failed (${response.status}): ${text}`);
+  if (!response.ok) {
+    throw new ApiFetchError(`${method} ${path} failed (${response.status}): ${text}`, {
+      method,
+      path,
+      status: response.status,
+      transient: isTransientHttpStatus(response.status),
+    });
+  }
   return data;
+}
+
+class ApiFetchError extends Error {
+  constructor(message, { method, path, status, transient = false, cause } = {}) {
+    super(message, cause ? { cause } : undefined);
+    this.name = "ApiFetchError";
+    this.method = method;
+    this.path = path;
+    this.status = status;
+    this.transient = transient;
+  }
+}
+
+function isTransientHttpStatus(status) {
+  return [408, 409, 425, 429, 500, 502, 503, 504].includes(Number(status));
+}
+
+function isTransientNetworkError(err) {
+  const parts = [
+    err?.name,
+    err?.message,
+    err?.code,
+    err?.cause?.name,
+    err?.cause?.message,
+    err?.cause?.code,
+  ].filter(Boolean).join(" ");
+  return /(terminated|fetch failed|network|socket|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|EPIPE|UND_ERR|aborted|timeout)/i.test(parts);
 }
 
 function buildAppUrl(ctx, path, params) {
@@ -1132,7 +1190,7 @@ function waitingResponse(status, paymentRequestId, collect, binding, message) {
 
 // --- Result formatting ---
 
-async function wrapToolResult(name, fn) {
+async function wrapToolResult(name, fn, args = {}) {
   try {
     const structuredContent = await fn();
     return {
@@ -1141,12 +1199,40 @@ async function wrapToolResult(name, fn) {
       isError: false,
     };
   } catch (err) {
+    if (name === "authorize_payment" && isRecoverableAuthorizePaymentError(err)) {
+      const structuredContent = recoverableAuthorizePaymentResult(args, err);
+      return {
+        content: [{ type: "text", text: formatToolText(name, structuredContent) }],
+        structuredContent,
+        isError: false,
+      };
+    }
     return {
       content: [{ type: "text", text: `❌ **${name}** failed\n\n${err.message}` }],
       structuredContent: { error: err.message },
       isError: true,
     };
   }
+}
+
+function isRecoverableAuthorizePaymentError(err) {
+  return err?.transient === true || isTransientNetworkError(err);
+}
+
+function recoverableAuthorizePaymentResult(args, err) {
+  const paymentRequestId = args?.paymentRequestId ?? null;
+  const retryInstruction = paymentRequestId
+    ? `wait ~${TRANSIENT_AUTHORIZE_RETRY_SECONDS} seconds and call authorize_payment again with paymentRequestId="${paymentRequestId}" and the same arguments.`
+    : `wait ~${TRANSIENT_AUTHORIZE_RETRY_SECONDS} seconds and call authorize_payment again with the same arguments.`;
+  return {
+    status: "pending",
+    paymentRequestId,
+    recoverable: true,
+    reason: "transient_error",
+    retryAfterSeconds: TRANSIENT_AUTHORIZE_RETRY_SECONDS,
+    error: err.message,
+    nextStep: `Do not report this as a failed payment. This is a recoverable backend/network interruption; ${retryInstruction}`,
+  };
 }
 
 function formatToolText(name, result) {
@@ -1236,6 +1322,25 @@ function formatPublishSite(result) {
 }
 
 function formatAuthorizePayment(result) {
+  if (result.status === "pending" && result.recoverable) {
+    const retry = result.retryAfterSeconds ?? TRANSIENT_AUTHORIZE_RETRY_SECONDS;
+    return [
+      `⏳ **Authorization still pending**`,
+      "",
+      `A temporary backend/network interruption occurred while checking or advancing the payment flow.`,
+      "",
+      "| | |",
+      "|---|---|",
+      `| Payment request | \`${result.paymentRequestId ?? "—"}\` |`,
+      `| Retry in | ~${retry}s |`,
+      `| Detail | \`${result.error ?? "transient error"}\` |`,
+      "",
+      `Wait ~${retry}s, then call authorize_payment again with the same paymentRequestId. Do not present this as a failed payment.`,
+      "",
+      `_${result.nextStep}_`,
+    ].join("\n");
+  }
+
   if (result.status === "completed") {
     const cred = result.paymentCredential ?? {};
     const lines = [
