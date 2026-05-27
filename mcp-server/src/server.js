@@ -126,6 +126,7 @@ const INTENT_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
 // authorize_payment again — same pattern as waiting_for_card / waiting_for_authentication.
 const CRYPTOGRAM_POLL_SECONDS = 5;
 const MAX_CRYPTOGRAM_ATTEMPTS = 6;
+const BROWSER_HANDOFF_POLL_SECONDS = 3;
 
 // Server-level instructions surfaced to the MCP client at initialize time.
 // Clients (Claude Desktop, Cursor, etc.) include this in the model's context
@@ -174,8 +175,8 @@ When the user asks you to make / build / generate a marketing site, follow this 
 6. publish_site returns status="payment_required" with a fresh \`paymentRequestId\`. It also includes \`savedCard\` (or null), \`walletReady\` (boolean), and \`intentExpiresAt\` (ISO date or null). Branch:
    - **\`savedCard\` set AND \`walletReady\` true**: a card is on file AND the TouchID-bound intent is still valid (today is before \`intentExpiresAt\`). Print the exact line from \`nextStep\` — "I see saved card: ... charging $5 for this site — using the existing intent valid until YYYY-MM-DD." — and immediately call **authorize_payment**. NO extra confirmation, NO TouchID prompt — the server reuses the existing intent and issues a brand-new one-time cryptogram for this $5.
    - **\`savedCard\` set AND \`walletReady\` false**: card on file, but no usable intent (first charge for this card, or the previous intent already expired). Print the saved-card line; mention that TouchID is required to create a new intent. Then call authorize_payment.
-   - **\`savedCard\` null**: no card on file at all. Do NOT ask for confirmation again — the user already approved the $5 charge in step 4. Print "No card on file — opening card form." and IMMEDIATELY call authorize_payment. It will return status="waiting_for_card" with a URL; surface that URL to the user, wait for them to finish entering the card, then call authorize_payment again with the same paymentRequestId.
-   - If authorize_payment returns "waiting_for_card" or "waiting_for_authentication", surface the URL to the user, wait for them to finish in the browser, then call authorize_payment AGAIN with the same paymentRequestId.
+   - **\`savedCard\` null**: no card on file at all. Do NOT ask for confirmation again — the user already approved the $5 charge in step 4. Print "No card on file — opening card form." and IMMEDIATELY call authorize_payment. It will return status="waiting_for_card" with a URL; surface that URL to the user, then poll by calling authorize_payment again with the same paymentRequestId until the browser posts completion.
+   - If authorize_payment returns "waiting_for_card" or "waiting_for_authentication", surface the URL to the user, wait a few seconds, then call authorize_payment AGAIN with the same paymentRequestId. The browser page posts completion to /api/sessions/:id; the repeated authorize_payment call reads it automatically. Do NOT ask the user to say "done" before polling.
    - If authorize_payment returns "waiting_for_cryptogram", the VGS cryptogram is still being generated (this typically takes 5–15 seconds after intent creation). Print "⏳ Generating payment cryptogram…", wait ~5 seconds, then call authorize_payment AGAIN with the same paymentRequestId — no other arguments. Repeat until status="completed". Do NOT call publish_site or any other tool while polling.
    - When authorize_payment returns status="completed", **first print the explicit success line from \`nextStep\`** to the user as its own short message. The format is fixed:
 
@@ -216,8 +217,8 @@ This server is running for Codex CLI. Assume there is no in-app browser and no a
 
 - After create_marketing_site/render_marketing_site returns, surface the returned previewUrl or previewPath directly to the user. If previewPath is present, it is already a local HTML preview written by the server.
 - Do not claim that a browser was opened unless the tool result says opened=true.
-- For waiting_for_card and waiting_for_authentication, paste the returned URL. If the tool result says opened=true, tell the user the browser was opened and ask them to complete the browser step there. If opened=false, ask them to open the URL manually. After the user says they completed it, call authorize_payment again with the same paymentRequestId.
-- Never pass waitForBrowser=true in Codex CLI. Let authorize_payment return waiting_for_card / waiting_for_authentication immediately, then resume after the user completes the opened browser step.
+- For waiting_for_card and waiting_for_authentication, paste the returned URL. If the tool result says opened=true, tell the user the browser was opened and ask them to complete the browser step there. If opened=false, ask them to open the URL manually. Then poll automatically by calling authorize_payment again with the same paymentRequestId after the tool result's retryAfterSeconds. Do NOT ask the user to say "done"; the browser posts completion to /api/sessions/:id and authorize_payment reads it on the next poll.
+- Never pass waitForBrowser=true in Codex CLI. Let authorize_payment return waiting_for_card / waiting_for_authentication immediately, then keep polling authorize_payment until the browser step completion appears.
 - Do not block waiting for browser completion in Codex CLI. The server defaults to non-blocking URL handoff in this mode.`;
 }
 
@@ -331,7 +332,7 @@ Fast path: if the buyer already has a TouchID-bound intent that is still within 
         useExistingCard: z.boolean().optional().describe("Set false to force a fresh card collection. Also forces the slow path (new wallet, new TouchID). Defaults to true."),
         forceNewWallet: z.boolean().optional().describe("Set true to bypass the existing wallet and force a fresh TouchID + new intent, even if the current wallet has charges left. Defaults to false."),
         consumerEmail: z.string().optional().describe("Consumer email used for token enrollment and OTP (slow path only)."),
-        waitForBrowser: z.boolean().optional().describe("If true, block until browser steps finish. In Codex CLI, leave this false/omitted so the tool returns waiting_for_card or waiting_for_authentication immediately; then resume by calling again with the same paymentRequestId after the user completes the opened browser step."),
+        waitForBrowser: z.boolean().optional().describe("If true, block until browser steps finish. In Codex CLI, leave this false/omitted so the tool returns waiting_for_card or waiting_for_authentication immediately; then poll by calling again with the same paymentRequestId until the browser posts completion."),
       },
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -526,7 +527,7 @@ async function handlePublishSite(args, ctx) {
   } else if (savedCard) {
     nextStep = `Print this exact line (no extra confirmation needed — the card is on file, but TouchID is required to create a new intent — either this is the first charge for this card, or the previous intent expired):\n\n"I see saved card: ${savedCard.label}, charging $${PAYMENT_AMOUNT} for this site. TouchID required to create a new intent."\n\nThen call authorize_payment with paymentRequestId="${paymentRequestId}". When it returns status=completed, call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}".`;
   } else {
-    nextStep = `No card on file — do NOT ask the user for confirmation again (they already approved the $${PAYMENT_AMOUNT} charge). Print this exact line:\n\n"No card on file — opening card form. Enter card details to continue with the $${PAYMENT_AMOUNT} charge."\n\nThen IMMEDIATELY call authorize_payment with paymentRequestId="${paymentRequestId}". It will return status="waiting_for_card" with a URL — surface that URL to the user, wait for them to finish, then call authorize_payment AGAIN with the same paymentRequestId. When it eventually returns status=completed, call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}".`;
+    nextStep = `No card on file — do NOT ask the user for confirmation again (they already approved the $${PAYMENT_AMOUNT} charge). Print this exact line:\n\n"No card on file — opening card form. Enter card details to continue with the $${PAYMENT_AMOUNT} charge."\n\nThen IMMEDIATELY call authorize_payment with paymentRequestId="${paymentRequestId}". It will return status="waiting_for_card" with a URL — surface that URL to the user, wait ~${BROWSER_HANDOFF_POLL_SECONDS} seconds, then call authorize_payment AGAIN with the same paymentRequestId. The browser posts completion to /api/sessions/:id, so do NOT ask the user to say "done" before polling. When it eventually returns status=completed, call publish_site AGAIN with the SAME params AND paymentRequestId="${paymentRequestId}".`;
   }
 
   return {
@@ -639,8 +640,8 @@ async function handleAuthorizePayment(args, ctx) {
       await ctx.requestStore.set(paymentRequestId, flow);
       return waitingResponse("waiting_for_card", paymentRequestId, collect, null,
         opened
-          ? "Complete the opened card form, save a card, then call authorize_payment again."
-          : "Open the collect URL, save a card, then call authorize_payment again.");
+          ? "Complete the opened card form and save a card. The agent should poll authorize_payment again automatically."
+          : "Open the collect URL and save a card. The agent should poll authorize_payment again automatically.");
     }
     const cardSession = await waitForSession(ctx, sessionId, ctx.waitMs);
     cardId = cardSession.cardId;
@@ -703,8 +704,8 @@ async function handleAuthorizePayment(args, ctx) {
     await ctx.requestStore.set(paymentRequestId, flow);
     return waitingResponse("waiting_for_authentication", paymentRequestId, collect, binding,
       binding.opened
-        ? "Complete TouchID / passkey authentication in the opened browser tab, then call authorize_payment again."
-        : "Open the binding URL, complete TouchID / passkey authentication, then call authorize_payment again.");
+        ? "Complete TouchID / passkey authentication in the opened browser tab. The agent should poll authorize_payment again automatically."
+        : "Open the binding URL and complete TouchID / passkey authentication. The agent should poll authorize_payment again automatically.");
   }
 
   if (!assuranceData) {
@@ -1097,7 +1098,16 @@ function deriveAppBaseUrl(apiBaseUrl) {
 }
 
 function waitingResponse(status, paymentRequestId, collect, binding, message) {
-  return { status, paymentRequestId, collect, binding, message };
+  const url = collect?.url || binding?.url || null;
+  return {
+    status,
+    paymentRequestId,
+    collect,
+    binding,
+    message,
+    retryAfterSeconds: BROWSER_HANDOFF_POLL_SECONDS,
+    nextStep: `Surface the browser URL${url ? ` (${url})` : ""}, wait ~${BROWSER_HANDOFF_POLL_SECONDS} seconds, then call authorize_payment again with paymentRequestId="${paymentRequestId}". Do not ask the user to say "done"; the browser page posts completion to /api/sessions/:id and this tool reads it automatically on the next call.`,
+  };
 }
 
 // --- Result formatting ---
@@ -1239,7 +1249,8 @@ function formatAuthorizePayment(result) {
         : "Complete device authentication (TouchID / passkey) in your browser:";
     const niceStatus = result.status.replace(/_/g, " ");
     const msg = result.message ? `\n\n${result.message}` : "";
-    return `⏳ **${niceStatus}**\n\n${browserLine}\n${url}${msg}`;
+    const retry = result.retryAfterSeconds ?? BROWSER_HANDOFF_POLL_SECONDS;
+    return `⏳ **${niceStatus}**\n\n${browserLine}\n${url}${msg}\n\nWait ~${retry}s, then call authorize_payment again with the same paymentRequestId. Do not ask the user to say "done"; completion is read automatically from the browser session.`;
   }
   if (result.status === "waiting_for_cryptogram") {
     const lines = [

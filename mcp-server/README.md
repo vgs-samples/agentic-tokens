@@ -34,9 +34,7 @@ Agent: [publish_site(params)] → payment_required, prXYZ
 Agent: [authorize_payment(prXYZ)] → waiting_for_card / waiting_for_authentication
        Open the returned URL and complete the browser step.
 
-You:  done
-
-Agent: [authorize_payment(prXYZ) — resume] → status: completed
+Agent: [authorize_payment(prXYZ) — polls until browser session completes] → status: completed
        ✅ Payment successful — $5 USD charged on card ending 1234 (cryptogram `cr_...`).
 
        [publish_site(params, paymentRequestId="prXYZ")] → status: published
@@ -102,7 +100,7 @@ If your client doesn't speak Streamable HTTP yet, use the `mcp-remote` shim:
 ```
 
 **HTTP-mode behavior differences:**
-- `authorize_payment` is **always non-blocking** — when a browser step is needed, the tool returns `status: waiting_for_card` / `waiting_for_authentication` with the URL inside `content[]`. The agent surfaces the URL to the user, who opens it manually. After the user completes the step, the agent calls `authorize_payment` again with the same `paymentRequestId` to advance.
+- `authorize_payment` is **always non-blocking** — when a browser step is needed, the tool returns `status: waiting_for_card` / `waiting_for_authentication` with the URL inside `content[]`. The agent surfaces the URL, then polls by calling `authorize_payment` again with the same `paymentRequestId`; the browser page posts completion to `/api/sessions/:id`, and the next poll advances the flow automatically.
 - Mid-flow state is stored in **Netlify Blobs** (store name `agentic-mcp-flow-state`, 30-minute TTL).
 
 **Quick smoke check** — the endpoint speaks JSON-RPC over POST:
@@ -148,7 +146,7 @@ Codex CLI should run the stdio server in URL-handoff mode. In this mode the serv
 
 - writes rendered previews to `/tmp/vellum/*.html`, opens the preview when possible, and returns a `file://` URL;
 - opens collect / binding URLs in the system browser when possible, while still returning the URLs in the tool result;
-- does not block inside `authorize_payment` while waiting for the user to finish a browser step. Do not pass `waitForBrowser=true` in Codex CLI.
+- does not block inside `authorize_payment` while waiting for the user to finish a browser step. Do not pass `waitForBrowser=true` in Codex CLI; poll `authorize_payment` again with the same `paymentRequestId` instead.
 
 Shareable GitHub install:
 
