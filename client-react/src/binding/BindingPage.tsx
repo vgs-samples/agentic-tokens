@@ -35,7 +35,6 @@ export function BindingPage() {
   const [otpMethods, setOtpMethods] = useState<any[]>([]);
   const [selectedMethodId, setSelectedMethodId] = useState("");
   const [otpDelivered, setOtpDelivered] = useState(false);
-  const [authDisabled, setAuthDisabled] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<unknown>(null);
 
@@ -82,17 +81,11 @@ export function BindingPage() {
         return;
       }
 
-      showAuth(session);
+      await authenticate(session);
     } catch (err) {
       setError((err as Error).message);
       setStatus("error");
     }
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function showAuth(session: any) {
-    void session;
-    setStatus("auth");
   }
 
   async function requestOtp() {
@@ -120,19 +113,20 @@ export function BindingPage() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const session = sessionRef.current as any;
       await session.submitOtp(otp.trim());
-      showAuth(session);
+      await authenticate(session);
     } catch (err) {
       setError((err as Error).message);
       setStatus("error");
     }
   }
 
-  async function authenticate() {
-    setAuthDisabled(true);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function authenticate(sessionArg?: any) {
+    setStatus("auth");
     setError(null);
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const session = sessionRef.current as any;
+      const session = sessionArg ?? (sessionRef.current as any);
       const assuranceData = await session.authenticate();
       session.destroy();
       sessionRef.current = null;
@@ -145,7 +139,6 @@ export function BindingPage() {
       setStatus("done");
     } catch (err) {
       setError((err as Error).message);
-      setAuthDisabled(false);
       setStatus("error");
     }
   }
@@ -227,9 +220,9 @@ export function BindingPage() {
         )}
 
         {status === "auth" && (
-          <Button onClick={authenticate} disabled={authDisabled}>
-            Authenticate
-          </Button>
+          <div className="bg-blue-50 border border-blue-200 text-blue-700 text-sm rounded p-3">
+            Complete the browser authentication prompt.
+          </div>
         )}
 
         <div ref={containerRef} className="mt-3" />

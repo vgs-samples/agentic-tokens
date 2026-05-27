@@ -25,8 +25,6 @@ export function DeviceBinding({ consumerEmail }: Props) {
   const [selectedMethodId, setSelectedMethodId] = useState("");
   const [otpDelivered, setOtpDelivered] = useState(false);
   const [sessionStarted, setSessionStarted] = useState(false);
-  const [authVisible, setAuthVisible] = useState(false);
-  const [authDisabled, setAuthDisabled] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   async function handleStartSession() {
@@ -61,10 +59,10 @@ export function DeviceBinding({ consumerEmail }: Props) {
         setSelectedMethodId(session.otpMethods[0]?.identifier ?? "");
         setOtpDelivered(false);
         setOtpVisible(true);
+        setLoading(3, false);
       } else {
-        showAuth(session);
+        await handleAuthenticate(session);
       }
-      setLoading(3, false);
     } catch (err: unknown) {
       const e = err as { message: string; code?: string; status?: number };
       log("Step 3: Session error — " + e.message);
@@ -72,12 +70,6 @@ export function DeviceBinding({ consumerEmail }: Props) {
       setSessionStarted(false);
       setLoading(3, false);
     }
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function showAuth(session: any) {
-    void session;
-    setAuthVisible(true);
   }
 
   async function handleRequestOtp() {
@@ -112,8 +104,7 @@ export function DeviceBinding({ consumerEmail }: Props) {
       await session.submitOtp(otp.trim());
       setOtpVisible(false);
       log("Step 3: OTP accepted");
-      showAuth(session);
-      setLoading(3, false);
+      await handleAuthenticate(session);
     } catch (err: unknown) {
       const e = err as { message: string; code?: string };
       log("Step 3: OTP error — " + e.message);
@@ -122,12 +113,12 @@ export function DeviceBinding({ consumerEmail }: Props) {
     }
   }
 
-  async function handleAuthenticate() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function handleAuthenticate(sessionArg?: any) {
     setLoading(3, true);
-    setAuthDisabled(true);
     log("Step 3: Running FIDO ceremony...");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const session = sessionRef.current as any;
+    const session = sessionArg ?? (sessionRef.current as any);
     try {
       const assuranceData = await session.authenticate();
       session.destroy();
@@ -140,7 +131,6 @@ export function DeviceBinding({ consumerEmail }: Props) {
       const e = err as { message: string; code?: string };
       log("Step 3: FIDO error — " + e.message);
       setResponse({ error: e.message, code: e.code });
-      setAuthDisabled(false);
       setLoading(3, false);
     }
   }
@@ -208,10 +198,6 @@ export function DeviceBinding({ consumerEmail }: Props) {
             </div>
           )}
         </>
-      )}
-
-      {authVisible && (
-        <Button onClick={handleAuthenticate} disabled={authDisabled}>Authenticate (FIDO)</Button>
       )}
 
       <div ref={containerRef} className="mt-3" />
