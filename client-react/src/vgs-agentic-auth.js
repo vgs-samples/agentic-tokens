@@ -51,6 +51,8 @@ const ENVIRONMENTS = {
 
 // const CLIENT_APP_ID = "VGSVicProvisionToken";
 const CLIENT_APP_ID = "VGS";
+const VISA_IFRAME_WIDTH = "390";
+const VISA_IFRAME_HEIGHT = "400";
 
 // ---------------------------------------------------------------------------
 // Error
@@ -168,15 +170,20 @@ function _transformAssuranceData(rawAssurance, dfpSessionID) {
 }
 
 /**
- * Create a hidden Visa VTS auth iframe and append it to a container.
+ * Create a Visa VTS auth iframe and append it to a container.
  * Returns the iframe element once it has been added to the DOM.
  */
 function _createIframe(container, origin, apiKey) {
   const src = `${origin}/vts-auth/authenticate?apiKey=${apiKey}&clientAppID=${CLIENT_APP_ID}`;
   const iframe = document.createElement("iframe");
   iframe.src = src;
-  iframe.width = "0";
-  iframe.height = "0";
+  iframe.title = "Visa authentication";
+  iframe.width = VISA_IFRAME_WIDTH;
+  iframe.height = VISA_IFRAME_HEIGHT;
+  iframe.style.display = "block";
+  iframe.style.width = "100%";
+  iframe.style.maxWidth = `${VISA_IFRAME_WIDTH}px`;
+  iframe.style.height = `${VISA_IFRAME_HEIGHT}px`;
   iframe.style.border = "none";
   iframe.allow = "publickey-credentials-get *; publickey-credentials-create *";
   container.appendChild(iframe);

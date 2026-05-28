@@ -57,17 +57,36 @@ export async function callVgs(baseUrl, method, path, body) {
   } else {
     console.log(`→ ${method} ${url}`);
   }
-  const res = await fetch(url, {
-    method,
-    headers: {
-      "Content-Type": "application/vnd.api+json",
-      Authorization: `Bearer ${token}`,
-    },
-    ...(body && { body: JSON.stringify(body) }),
-  });
-  const text = await res.text();
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: {
+        "Content-Type": "application/vnd.api+json",
+        Authorization: `Bearer ${token}`,
+      },
+      ...(body && { body: JSON.stringify(body) }),
+    });
+  } catch (err) {
+    throw new Error(`${method} ${url} network failed: ${err.message}`, { cause: err });
+  }
+
+  let text = "";
+  try {
+    text = await res.text();
+  } catch (err) {
+    throw new Error(`${method} ${url} response read failed: ${err.message}`, { cause: err });
+  }
+
   console.log(`← ${res.status} ${text.substring(0, 500)}`);
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { raw: text };
+    }
+  }
   return { status: res.status, data };
 }
 
