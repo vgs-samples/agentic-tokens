@@ -1,6 +1,7 @@
 import express from "express";
 import { config as loadEnv } from "dotenv";
 import { config as vgsConfig, callVgs, getAccessToken, hasCredentials } from "./vgs.js";
+import { enrichCardSurface, enrichMissingCardSurfaces } from "./card-surface.js";
 
 loadEnv();
 
@@ -132,28 +133,31 @@ app.get("/api/sessions/:id", (req, res) => {
 // only the opaque VGS cardId plus surface-display metadata.
 const merchantCards = new Map();
 
-app.get("/api/merchant/cards/:buyerId", (req, res) => {
+app.get("/api/merchant/cards/:buyerId", handler(async (req, res) => {
   const cards = merchantCards.get(req.params.buyerId) ?? [];
-  res.json({ buyerId: req.params.buyerId, cards });
-});
+  const enriched = await enrichMissingCardSurfaces(cards);
+  if (enriched.changed) merchantCards.set(req.params.buyerId, enriched.cards);
+  res.json({ buyerId: req.params.buyerId, cards: enriched.cards });
+}));
 
-app.post("/api/merchant/cards/:buyerId", (req, res) => {
-  const { cardId, lastFour, brand, expMonth, expYear } = req.body;
+app.post("/api/merchant/cards/:buyerId", handler(async (req, res) => {
+  const { cardId } = req.body;
   if (!cardId) return res.status(400).json({ error: "cardId required" });
+  const surface = await enrichCardSurface(req.body, { force: true });
   const existing = merchantCards.get(req.params.buyerId) ?? [];
   // Dedup by cardId — re-saving the same card just refreshes its position.
   const next = existing.filter((c) => c.cardId !== cardId);
   next.unshift({
-    cardId,
-    lastFour: lastFour ?? null,
-    brand: brand ?? null,
-    expMonth: expMonth ?? null,
-    expYear: expYear ?? null,
+    cardId: surface.cardId,
+    lastFour: surface.lastFour,
+    brand: surface.brand,
+    expMonth: surface.expMonth,
+    expYear: surface.expYear,
     savedAt: Date.now(),
   });
   merchantCards.set(req.params.buyerId, next);
   res.json({ buyerId: req.params.buyerId, cards: next });
-});
+}));
 
 app.delete("/api/merchant/cards/:buyerId", (req, res) => {
   const { cardId } = req.query;

@@ -1,4 +1,5 @@
 import { getStore } from "@netlify/blobs";
+import { enrichCardSurface, enrichMissingCardSurfaces } from "../../server/card-surface.js";
 import { json, wrap } from "./_lib.js";
 
 // Mock merchant card store: buyerId → [{cardId, lastFour, brand?, savedAt}].
@@ -16,7 +17,11 @@ export default wrap(async (req) => {
     const result = {};
     for (const { key } of blobs) {
       const value = await store.get(key, { type: "json" });
-      if (Array.isArray(value?.cards)) result[key] = value.cards;
+      if (Array.isArray(value?.cards)) {
+        const enriched = await enrichMissingCardSurfaces(value.cards);
+        if (enriched.changed) await store.setJSON(key, { cards: enriched.cards });
+        result[key] = enriched.cards;
+      }
     }
     return json(200, result);
   }
@@ -25,21 +30,25 @@ export default wrap(async (req) => {
 
   if (req.method === "GET") {
     const value = await store.get(buyerId, { type: "json" });
-    return json(200, { buyerId, cards: value?.cards ?? [] });
+    const cards = value?.cards ?? [];
+    const enriched = await enrichMissingCardSurfaces(cards);
+    if (enriched.changed) await store.setJSON(buyerId, { cards: enriched.cards });
+    return json(200, { buyerId, cards: enriched.cards });
   }
 
   if (req.method === "POST") {
     const body = await req.json().catch(() => ({}));
     if (!body.cardId) return json(400, { error: "cardId required" });
+    const surface = await enrichCardSurface(body, { force: true });
     const current = await store.get(buyerId, { type: "json" });
     const existing = Array.isArray(current?.cards) ? current.cards : [];
     const next = existing.filter((c) => c.cardId !== body.cardId);
     next.unshift({
-      cardId: body.cardId,
-      lastFour: body.lastFour ?? null,
-      brand: body.brand ?? null,
-      expMonth: body.expMonth ?? null,
-      expYear: body.expYear ?? null,
+      cardId: surface.cardId,
+      lastFour: surface.lastFour,
+      brand: surface.brand,
+      expMonth: surface.expMonth,
+      expYear: surface.expYear,
       savedAt: Date.now(),
     });
     await store.setJSON(buyerId, { cards: next });
