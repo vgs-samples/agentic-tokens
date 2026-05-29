@@ -6,19 +6,107 @@ The MCP server exposes the agency's product surface; the React app on the same s
 
 ## What's in the box
 
-- **`create_marketing_site(params)`** / **`render_marketing_site(params)`** — renders the first preview from a small JSON params object. `create_marketing_site` is the preferred tool name for Codex CLI because it matches common prompts like "create a marketing site".
-- **`publish_site(params, buyerId?, paymentRequestId?)`** — publishes the preview after payment. First call returns `status: payment_required` with a `paymentRequestId`; second call with that completed request publishes `/s/<siteId>`.
-- **`authorize_payment(paymentRequestId)`** — triggers card collection when needed, runs device binding (TouchID / FIDO / OTP), and captures a one-time $5 cryptogram-backed charge.
-- **`wallet_status(buyerId?)`** / **`clear_wallet(buyerId?)`** — inspect or clear the buyer's latest TouchID-bound payment intent record.
-- **`authorization_status(buyerId?)`** — answers prompts like "how much are you authorized to spend?" from the saved intent and mandate limits.
-- **`payment_proof(buyerId?, paymentRequestId?)`** — shows the latest or requested cryptogram proof for demo narration.
-- **`add_buyer_card(buyerId?, cardRequestId?, waitForBrowser?)`** — opens the card collection form and saves a card without creating a payment request, TouchID intent, cryptogram, or charge.
-- **`list_buyer_cards(buyerId?)`** / **`forget_card(buyerId?, cardId?)`** — card management.
+- **Site preview:** `create_marketing_site` builds the preview; `render_marketing_site` is the older alias.
+- **Publishing:** `publish_site` starts the $5 publish flow, then publishes after payment succeeds.
+- **Payment:** `authorize_payment` collects a card if needed, asks for TouchID / FIDO / OTP, creates a fresh intent, gets a cryptogram, and confirms the charge.
+- **Saved cards:** `add_buyer_card`, `list_buyer_cards`, and `forget_card` let the user save, inspect, and remove cards.
+- **Wallet and authorization:** `wallet_status`, `authorization_status`, and `clear_wallet` inspect or clear the latest stored intent record.
+- **Proof:** `payment_proof` shows the cryptogram and confirmation details for the latest or requested payment.
 
 Built on `@modelcontextprotocol/sdk@^1.29`. Two transports ship together:
 
 - **stdio** — `node mcp-server/src/index.js`, auto-opens browser tabs for collect / binding. Best for desktop MCP clients.
 - **HTTP** — deployed at `https://<your-site>/mcp` via `netlify/functions/mcp.js`, stateless, non-blocking. The agent surfaces collect / binding URLs back to the user instead.
+
+## Tool Guide
+
+You normally do not call these tools by hand. The assistant chooses the right tool based on what the user asks for. This section explains what each tool is for and gives human-readable prompts you can use during a demo.
+
+### Build and Preview a Site
+
+Use `create_marketing_site` when the user asks the agent to make, build, draft, or generate a marketing landing page. The tool creates a preview only; it does not charge the card and does not publish anything.
+
+Example prompts:
+
+- "Create a marketing site for Acme Coffee Co."
+- "Build a landing page for a premium coffee subscription."
+- "Draft a promo site for a boutique hotel."
+
+`render_marketing_site` does the same thing as `create_marketing_site`. It exists as a backward-compatible alias; new demos should prefer `create_marketing_site`.
+
+### Publish a Site
+
+Use `publish_site` after the user has reviewed the preview and explicitly agreed to publish for $5. Publishing is a two-step flow:
+
+1. The first `publish_site` call creates a payment request and returns the saved cards plus an "Add a new card" option.
+2. After payment succeeds, the second `publish_site` call publishes the site and returns the live URL plus the payment proof block.
+
+Example prompts:
+
+- "Publish this for $5."
+- "Yes, deploy it."
+- "Use the Visa ending in 1478."
+- "Add a new card for this payment."
+
+### Authorize and Capture Payment
+
+Use `authorize_payment` after `publish_site` says payment is required. The tool handles card collection if needed, asks for TouchID / FIDO / OTP, creates a fresh intent for every payment, gets the cryptogram, sends the confirmation, and returns proof that the $5 payment was captured.
+
+Every new publish requires fresh TouchID, even if the same saved card was used before.
+
+Example prompts:
+
+- "Use the saved Visa."
+- "Use the Mastercard ending in 1569."
+- "Add a new card."
+- "Continue the payment."
+
+If the tool returns a browser URL, the user opens it and completes the browser step. The assistant then polls `authorize_payment` again until the flow completes.
+
+### Saved Cards
+
+Use `add_buyer_card` when the user wants to save a card without charging it. This opens the card collection form and stores the safe card surface: card id, brand, last four, and expiry. It does not create an intent, cryptogram, or payment.
+
+Use `list_buyer_cards` when the user asks what cards are saved. It returns every saved card for the buyer so the user can choose one for payment.
+
+Use `forget_card` when the user wants to remove one saved card, or remove all saved cards for the buyer.
+
+Example prompts:
+
+- "Add a card."
+- "Save a new card."
+- "Show my saved cards."
+- "Remove the Visa ending in 1478."
+- "Forget all saved cards."
+
+### Wallet and Authorization Status
+
+Use `wallet_status` when the user asks what latest payment intent or card is stored. The wallet is kept for proof and demo narration. It is not used to skip TouchID; every new payment still creates a fresh intent.
+
+Use `authorization_status` when the user asks about what the latest intent authorized: the per-charge amount, mandate quantity, remaining envelope, and expiry.
+
+Use `clear_wallet` when the user wants to delete the stored latest intent record from the local merchant state. This does not delete saved cards and does not cancel the VGS intent on-network.
+
+Example prompts:
+
+- "What card is on file?"
+- "What intent is saved?"
+- "How much are you authorized to spend?"
+- "What did I authorize?"
+- "Clear the wallet."
+
+### Payment Proof and Cryptograms
+
+Use `payment_proof` when the user asks to show the cryptogram or proof for the latest completed payment. The tool can also show proof for a specific payment request id.
+
+The proof includes the payment request id, cryptogram id, cryptogram type, masked DPAN, DPAN expiry, cryptogram expiry, confirmation status, and timestamps. Full cryptogram values are shown only when `AGENTIC_SHOW_FULL_CRYPTOGRAM=true` in sandbox mode.
+
+Example prompts:
+
+- "Show me the cryptogram."
+- "Show payment proof."
+- "Show the cryptogram for payment pr73d70741."
+- "What credential paid for the deploy?"
 
 ## Demo script
 
