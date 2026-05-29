@@ -10,6 +10,20 @@ const FIELD_CSS = {
 
 type CardOption = "card1" | "card2" | "custom";
 
+const CARD_BRAND_KEYS = [
+  "brand",
+  "card_brand",
+  "cardBrand",
+  "card_network",
+  "cardNetwork",
+  "payment_network",
+  "paymentNetwork",
+  "network",
+  "scheme",
+  "card_scheme",
+  "cardScheme",
+];
+
 const TEST_CARDS = [
   { id: "card1" as CardOption, label: "Card 1 — ...1569", pan: "4622943123121569", cvv: "814", exp: "12 / 27" },
   { id: "card2" as CardOption, label: "Card 2 — ...1478", pan: "4622943123121478", cvv: "845", exp: "12 / 27" },
@@ -27,6 +41,7 @@ export function CollectPage() {
   const [readyForOption, setReadyForOption] = useState<CardOption | null>(null);
   const formRef = useRef<VgsCollectForm | null>(null);
   const fieldsRef = useRef<{ number?: VgsCollectField; cvc?: VgsCollectField; exp?: VgsCollectField }>({});
+  const collectStateRef = useRef<VgsCollectForm["state"]>({});
 
   // Init Collect form once.
   useEffect(() => {
@@ -46,7 +61,7 @@ export function CollectPage() {
         const form = await window.VGSCollect.session({
           vaultId: cfg.vaultId,
           env: cfg.vaultEnv,
-          stateCallback: () => {},
+          stateCallback: (state) => { collectStateRef.current = state; },
           authHandler: async () => await fetchAccessToken(),
         });
         if (cancelled) {
@@ -117,7 +132,7 @@ export function CollectPage() {
       if (!id) throw new Error("Card creation returned no id");
       setCardId(id);
 
-      const surface = extractCardSurface(result);
+      const surface = extractCardSurface(result, collectStateRef.current);
 
       const payload = { cardId: id, buyerId, ...surface };
 
@@ -145,7 +160,7 @@ export function CollectPage() {
 
   // VGS CMP doesn't standardize the response attribute names across versions,
   // so try a few common ones and fall back to scraping the masked PAN.
-  function extractCardSurface(result: VgsCollectCardResult): {
+  function extractCardSurface(result: VgsCollectCardResult, collectState: VgsCollectForm["state"] = {}): {
     lastFour: string | null;
     brand: string | null;
     expMonth: string | null;
@@ -159,12 +174,10 @@ export function CollectPage() {
       (typeof attrs.maskedNumber === "string" && attrs.maskedNumber.slice(-4)) ||
       (typeof attrs.number === "string" && attrs.number.slice(-4)) ||
       null;
-    const brand =
-      (typeof attrs.brand === "string" && attrs.brand) ||
-      (typeof attrs.card_brand === "string" && attrs.card_brand) ||
-      (typeof attrs.cardBrand === "string" && attrs.cardBrand) ||
-      (typeof attrs.card_type === "string" && attrs.card_type) ||
-      null;
+    const brand = findFirstStringByKey(
+      [attrs, result?.data, collectState],
+      CARD_BRAND_KEYS
+    );
     const expMonthRaw =
       attrs.exp_month ?? attrs.expMonth ?? attrs.expiration_month ?? attrs.expirationMonth ?? null;
     const expYearRaw =
@@ -172,6 +185,25 @@ export function CollectPage() {
     const expMonth = expMonthRaw != null ? String(expMonthRaw).padStart(2, "0").slice(-2) : null;
     const expYear = expYearRaw != null ? String(expYearRaw).slice(-2) : null;
     return { lastFour: lastFour || null, brand: brand || null, expMonth, expYear };
+  }
+
+  function findFirstStringByKey(sources: unknown[], keys: string[]): string | null {
+    const keySet = new Set(keys);
+    for (const source of sources) {
+      const value = findStringByKey(source, keySet);
+      if (value) return value;
+    }
+    return null;
+  }
+
+  function findStringByKey(source: unknown, keys: Set<string>, depth = 0): string | null {
+    if (!source || typeof source !== "object" || depth > 5) return null;
+    for (const [key, value] of Object.entries(source)) {
+      if (keys.has(key) && typeof value === "string" && value.trim()) return value.trim();
+      const nested = findStringByKey(value, keys, depth + 1);
+      if (nested) return nested;
+    }
+    return null;
   }
 
   const fieldsReady = readyForOption === option;
