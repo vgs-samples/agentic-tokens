@@ -191,11 +191,23 @@ When the user asks you to make / build / generate a marketing site, follow this 
    - The tool result table also includes \`cryptogramId\`, masked \`paymentCredential\` (dpanMasked, expiry, cryptogramPreview), and \`intentExpiresAt\`. DO NOT reformat, hide, or summarize that table — the user wants to see a brand-new one-time cryptogram for every $5 charge.
    - Finally, call **publish_site AGAIN** with the SAME params AND \`paymentRequestId\` (the one you just authorized). The server validates the charge, publishes the site, and marks that paymentRequestId as redeemed (it cannot be reused).
 
-7. **Final user-facing message after publish_site returns status=published — keep it SHORT.** The payment proof (amount, card, cryptogram id) was already shown in step 6's "Payment successful" line. The final message just announces the URL:
+7. **Final user-facing message after publish_site returns status=published — keep it SHORT and in English.** The final message announces the URL and includes the payment proof block from the tool result:
 
-   > 🚀 Published: <URL>
+   > ✅ Deploy complete — <URL>
+   >
+   > Payment proof for <paymentRequestId>:
+   >
+   > <cryptogram id>
+   >
+   > Details:
+   >
+   > - Type: DAVV
+   > - DPAN: ••••-••••-••••-7631
+   > - DPAN expiry: 04/28
+   > - Expires: 2026-06-01T21:38:33+00:00
+   > - Confirmation status: APPROVED
 
-   That's the whole message. Do NOT repeat the amount, card last4, or cryptogram id — they're already in the previous turn's payment-success line. Repeating creates noise.
+   That's the whole message. Do NOT repeat the amount or card id — they were already shown in the previous turn's payment-success line.
 
 # Anti-patterns — do not do these:
 
@@ -204,7 +216,7 @@ When the user asks you to make / build / generate a marketing site, follow this 
 - **Do NOT write the params or HTML to a local file** (other than the artifactHtml iframe wrapper from step 3a). Pass params directly to the tool as JSON.
 - **Do NOT skip step 3 (the preview).** The preview is how the user reviews the page. Without it they can't see what they're about to pay for.
 - **Do NOT skip the Payment-successful line** at the end of step 6. That single message is the demo's proof — it shows amount, card last4, and cryptogram id. The whole point is making the per-charge cryptogram visible.
-- **Do NOT repeat payment details in the step-7 publish message.** Once Payment-successful was shown, the final "🚀 Published" line is just the URL. Don't restate the amount, card, or cryptogram id — it makes the transcript noisy.
+- **Do NOT repeat amount or card details in the step-7 publish message.** Once Payment-successful was shown, the final deploy message should include only the URL and the payment proof block. Keep this block in English.
 - **Do NOT batch Vellum tool calls in the same assistant turn.** Especially never \`authorize_payment\` + \`publish_site\` together. They depend on each other; running in parallel triggers retries and double-charges in the trace. One call per turn. Period. (See the "one tool call per turn" rule at the top of these instructions.)
 - **Do NOT pass paymentRequestId on the FIRST publish_site call** of a new site. That parameter is only for the second (post-payment) call. Passing it on the first call will fail.
 - **Do NOT reuse a paymentRequestId across sites.** Each site costs $5 and needs its own paymentRequestId. Reusing one fails with "already redeemed".
@@ -533,6 +545,13 @@ async function handlePublishSite(args, ctx) {
       body: { redeemed: true, redeemedAt: Date.now(), siteId },
     });
     const liveUrl = `${ctx.appBaseUrl}/s/${siteId}`;
+    const paidCryptogramId = pr.cryptogramId ?? pr.paymentCredential?.cryptogramId ?? null;
+    const deployPaymentProof = formatDeployPaymentProof({
+      paymentRequestId: args.paymentRequestId,
+      cryptogramId: paidCryptogramId,
+      paymentCredential: pr.paymentCredential ?? null,
+      confirmationStatus: pr.confirmationStatus ?? pr.confirmation?.status ?? null,
+    });
     return {
       status: "published",
       siteId,
@@ -541,9 +560,11 @@ async function handlePublishSite(args, ctx) {
       paymentRequestId: args.paymentRequestId,
       amount: pr.amount ?? PAYMENT_AMOUNT,
       currency: pr.currency ?? PAYMENT_CURRENCY,
-      cryptogramId: pr.cryptogramId ?? null,
+      cryptogramId: paidCryptogramId,
       paymentCredential: pr.paymentCredential ?? null,
-      nextStep: `Site is live. Your final assistant message MUST announce the URL — omitting it is a bug. Print this EXACT line on its own line:\n\n✅ Deploy complete — ${liveUrl}\n\nDo NOT repeat the payment amount, card, or cryptogram id — those were already shown. The URL must be clickable, on a single line.`,
+      confirmationStatus: pr.confirmationStatus ?? pr.confirmation?.status ?? null,
+      deployPaymentProof,
+      nextStep: `Site is live. Your final assistant message MUST announce the URL and include the payment proof block — omitting either is a bug. Print this EXACT message:\n\n✅ Deploy complete — ${liveUrl}\n\n${deployPaymentProof}\n\nDo NOT repeat the payment amount or card id — those were already shown.`,
     };
   }
 
@@ -1759,6 +1780,15 @@ function formatPublishSite(result) {
       `| Site | \`${result.siteId}\` |`,
       `| Live URL | **${result.url}** |`,
     ];
+    if (result.cryptogramId) lines.push(`| Cryptogram | \`${result.cryptogramId}\` |`);
+    if (result.deployPaymentProof) {
+      lines.push(
+        "",
+        "**Payment proof**",
+        "",
+        result.deployPaymentProof,
+      );
+    }
     lines.push("", `_${result.nextStep}_`);
     return lines.join("\n");
   }
@@ -1970,6 +2000,23 @@ function formatPaymentProof(result) {
   if (p.intentExpiresAt) lines.push(`| Intent valid until | ${new Date(p.intentExpiresAt).toISOString().slice(0, 10)} |`);
   if (p.completedAt) lines.push(`| Captured at | ${new Date(p.completedAt).toISOString()} |`);
   return lines.join("\n");
+}
+
+function formatDeployPaymentProof({ paymentRequestId, cryptogramId, paymentCredential, confirmationStatus }) {
+  const cred = paymentCredential ?? {};
+  return [
+    `Payment proof for ${paymentRequestId}:`,
+    "",
+    `${cryptogramId ?? cred.cryptogramId ?? "—"}`,
+    "",
+    "Details:",
+    "",
+    `- Type: ${cred.type ?? "—"}`,
+    `- DPAN: ${cred.dpanMasked ?? "—"}`,
+    `- DPAN expiry: ${cred.expiry ?? "—"}`,
+    `- Expires: ${cred.cryptogramExpiresAt ?? "—"}`,
+    `- Confirmation status: ${confirmationStatus ?? "—"}`,
+  ].join("\n");
 }
 
 function formatClearWallet(result) {
