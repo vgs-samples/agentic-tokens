@@ -1,8 +1,13 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchAccessToken } from "../api";
 import { Button, Field, Row } from "../components/ui";
 
 const SANDBOX_OTP = "456789";
+const CARD_DETAILS = {
+  brand: "Visa",
+  lastFour: "1478",
+  expiry: "12/27",
+};
 
 const CURRENCY_NUMERIC_CODES: Record<string, string> = {
   USD: "840",
@@ -37,8 +42,32 @@ export function BindingPage() {
   const [otpDelivered, setOtpDelivered] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<unknown>(null);
+  const autoStartedRef = useRef(false);
 
-  async function startBinding() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const authenticate = useCallback(async (sessionArg?: any) => {
+    setStatus("auth");
+    setError(null);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = sessionArg ?? (sessionRef.current as any);
+      const assuranceData = await session.authenticate();
+      session.destroy();
+      sessionRef.current = null;
+
+      await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tokenId, buyerId, assuranceData }),
+      });
+      setStatus("done");
+    } catch (err) {
+      setError((err as Error).message);
+      setStatus("error");
+    }
+  }, [buyerId, sessionId, tokenId]);
+
+  const startBinding = useCallback(async () => {
     if (!sessionId) {
       setError("Missing sessionId in URL");
       setStatus("error");
@@ -86,7 +115,13 @@ export function BindingPage() {
       setError((err as Error).message);
       setStatus("error");
     }
-  }
+  }, [amount, authenticate, consumerEmail, currencyCode, environment, merchantName, sessionId, tokenId]);
+
+  useEffect(() => {
+    if (autoStartedRef.current) return;
+    autoStartedRef.current = true;
+    void startBinding();
+  }, [startBinding]);
 
   async function requestOtp() {
     const method = otpMethods.find((m) => m.identifier === selectedMethodId);
@@ -120,32 +155,9 @@ export function BindingPage() {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async function authenticate(sessionArg?: any) {
-    setStatus("auth");
-    setError(null);
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const session = sessionArg ?? (sessionRef.current as any);
-      const assuranceData = await session.authenticate();
-      session.destroy();
-      sessionRef.current = null;
-
-      await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tokenId, buyerId, assuranceData }),
-      });
-      setStatus("done");
-    } catch (err) {
-      setError((err as Error).message);
-      setStatus("error");
-    }
-  }
-
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 flex items-center justify-center p-6">
-      <div className="bg-white rounded-lg shadow max-w-lg w-full p-6">
+      <div className="bg-white rounded-lg shadow max-w-lg w-full min-h-[640px] p-6 flex flex-col">
         <h1 className="text-xl font-semibold mb-1">Confirm Purchase</h1>
         <p className="text-sm text-gray-500 mb-4">
           {productName} at {merchantName}
@@ -161,8 +173,12 @@ export function BindingPage() {
             <span className="font-mono text-xs break-all">{buyerId || "unknown"}</span>
           </div>
           <div className="flex justify-between gap-4 mt-1">
-            <span className="text-gray-500">Token</span>
-            <span className="font-mono text-xs break-all">{tokenId || "missing"}</span>
+            <span className="text-gray-500">Card</span>
+            <span className="font-medium">{CARD_DETAILS.brand} ending in {CARD_DETAILS.lastFour}</span>
+          </div>
+          <div className="flex justify-between gap-4 mt-1">
+            <span className="text-gray-500">Expiry</span>
+            <span className="font-medium">{CARD_DETAILS.expiry}</span>
           </div>
         </div>
 
@@ -182,9 +198,9 @@ export function BindingPage() {
         )}
 
         {(status === "idle" || status === "starting") && (
-          <Button onClick={startBinding} disabled={status === "starting"}>
-            {status === "starting" ? "Starting..." : "Start Visa Authentication"}
-          </Button>
+          <div className="bg-blue-50 border border-blue-200 text-blue-700 text-sm rounded p-3">
+            Preparing secure card authentication...
+          </div>
         )}
 
         {status === "otp" && (
@@ -225,7 +241,10 @@ export function BindingPage() {
           </div>
         )}
 
-        <div ref={containerRef} className="mt-3" />
+        <div
+          ref={containerRef}
+          className="mt-4 flex min-h-[400px] w-full items-start justify-center overflow-hidden rounded border border-gray-200 bg-gray-50"
+        />
 
         <Row>
           <div />
