@@ -140,6 +140,8 @@ const SERVER_INSTRUCTIONS = `You are using Vellum — a service that builds and 
 
 The site itself is RENDERED ON THE SERVER from a fixed, polished template. You do NOT write HTML. You only generate a small JSON params object that fills the template — brand name, theme color, copy, prices, etc. The server handles all markup, Tailwind classes, animations, and image URLs.
 
+If the user asks "how much are you authorized to spend", "what did I authorize", or asks about the intent limits, call \`authorization_status\` and answer from the returned intent and mandate fields. If the user asks to "show the cryptogram", "show payment proof", or asks about the last one-time credential, call \`payment_proof\`. Do not answer these from memory.
+
 ## CRITICAL: one tool call per turn
 
 Every Vellum tool call **must be its own assistant turn**. NEVER batch two Vellum tool calls in the same assistant response.
@@ -355,6 +357,33 @@ Fast path: if the buyer already has a TouchID-bound intent that is still within 
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     (args) => wrapToolResult("wallet_status", () => handleWalletStatus(args, ctx)),
+  );
+
+  server.registerTool(
+    "authorization_status",
+    {
+      title: "Show intent authorization limits",
+      description: `Return the active TouchID-bound intent and mandate limits. Use when the user asks "how much are you authorized to spend", "what did I authorize", "what is the intent", or "what are the payment limits".`,
+      inputSchema: {
+        buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    (args) => wrapToolResult("authorization_status", () => handleAuthorizationStatus(args, ctx)),
+  );
+
+  server.registerTool(
+    "payment_proof",
+    {
+      title: "Show payment cryptogram proof",
+      description: "Return the latest completed payment proof, including intent id and cryptogram details. Use when the user asks to show the cryptogram, payment proof, last cryptogram, or the one-time credential. Pass paymentRequestId to show a specific charge; omit it for the latest buyer proof.",
+      inputSchema: {
+        buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
+        paymentRequestId: z.string().optional().describe("Optional completed payment request id. If omitted, returns the latest cryptogram proof saved on the buyer wallet."),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    (args) => wrapToolResult("payment_proof", () => handlePaymentProof(args, ctx)),
   );
 
   server.registerTool(
@@ -595,6 +624,10 @@ async function handleAuthorizePayment(args, ctx) {
       intentId: pr.intentId ?? null,
       cryptogramId: pr.cryptogramId ?? null,
       paymentCredential: pr.paymentCredential ?? null,
+      intentExpiresAt: pr.intentExpiresAt ?? null,
+      amount: pr.amount ?? PAYMENT_AMOUNT,
+      currency: pr.currency ?? PAYMENT_CURRENCY,
+      reusedWallet: pr.reusedWallet ?? null,
       nextStep: `Charge already captured — deploy is MANDATORY. In THIS SAME TURN: print "🚀 Starting deploy…" on its own line, then IMMEDIATELY call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}". Do NOT ask the user for permission. End-of-turn without calling publish_site is a bug.`,
     };
   }
@@ -780,7 +813,7 @@ async function attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr) {
   if (!paymentCredential) throw new Error(`Cryptogram response returned no payment credential: ${JSON.stringify(cryptogram)}`);
 
   const cryptogramId = extractCryptogramId(cryptogram);
-  const maskedCredential = maskPaymentCredential(paymentCredential);
+  const maskedCredential = maskPaymentCredential(paymentCredential, ctx);
 
   if (cryptogramId === null) {
     flow.cryptogramAttempts = (flow.cryptogramAttempts ?? 0) + 1;
@@ -803,26 +836,60 @@ async function attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr) {
   }
 
   const intentExpiresAt = flow.intentExpiresAt ?? (Date.now() + INTENT_DURATION_MS);
+  const completedAt = Date.now();
+  const amount = pr.amount ?? PAYMENT_AMOUNT;
+  const currency = pr.currency ?? PAYMENT_CURRENCY;
+  const existingWallet = await getWalletState(ctx, flow.buyerId);
+  const mandateUsed = flow.reusedWallet ? Number(existingWallet?.mandateUsed ?? 0) + 1 : 1;
+  const paymentProof = {
+    paymentRequestId,
+    buyerId: flow.buyerId,
+    cardId: flow.cardId,
+    tokenId: flow.tokenId,
+    intentId: flow.intentId,
+    intentExpiresAt,
+    cryptogramId,
+    paymentCredential: maskedCredential,
+    amount,
+    currency,
+    completedAt,
+    reusedWallet: Boolean(flow.reusedWallet),
+  };
   await saveWalletState(ctx, flow.buyerId, {
-    plan: pr.plan, amount: pr.amount, currency: pr.currency,
+    plan: pr.plan,
+    amount,
+    currency,
     cardId: flow.cardId,
     tokenId: flow.tokenId,
     intentId: flow.intentId,
     intentCreatedAt: flow.intentCreatedAt ?? Date.now(),
     intentExpiresAt,
-    lastChargedAt: Date.now(),
+    authorizedPerChargeAmount: amount,
+    authorizedPerChargeCurrency: currency,
+    mandateQuantity: MANDATE_QUANTITY,
+    mandateUsed,
+    mandateRemaining: Math.max(MANDATE_QUANTITY - mandateUsed, 0),
+    lastChargedAt: completedAt,
+    lastPaymentRequestId: paymentRequestId,
+    lastCryptogramId: cryptogramId,
+    lastPaymentProof: paymentProof,
   });
 
   await apiFetch(ctx, `/payment-requests/${encodeURIComponent(paymentRequestId)}`, {
     method: "PUT",
     body: {
       status: "completed",
-      completedAt: Date.now(),
+      completedAt,
       cardId: flow.cardId,
       tokenId: flow.tokenId,
       intentId: flow.intentId,
+      intentExpiresAt,
+      authorizedPerChargeAmount: amount,
+      authorizedPerChargeCurrency: currency,
+      mandateQuantity: MANDATE_QUANTITY,
       cryptogramId,
       paymentCredential: maskedCredential,
+      reusedWallet: Boolean(flow.reusedWallet),
     },
   });
 
@@ -837,8 +904,8 @@ async function attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr) {
     intentExpiresAt,
     cryptogramId,
     paymentCredential: maskedCredential,
-    amount: pr.amount ?? PAYMENT_AMOUNT,
-    currency: pr.currency ?? PAYMENT_CURRENCY,
+    amount,
+    currency,
     reusedWallet,
     nextStep: `Payment is captured — deploy is now MANDATORY. Do all of the following in THIS SAME TURN, in this exact order:\n\n1. Print this EXACT success line:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, ${reusedWallet ? "fast-path — no TouchID needed, existing intent" : "first charge on a fresh TouchID-bound intent"} valid until ${new Date(intentExpiresAt).toISOString().slice(0, 10)}).\n\n2. On the next line, print exactly:\n\n🚀 Starting deploy…\n\n3. IMMEDIATELY call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}". Do NOT stop, do NOT ask the user for permission — the user already paid, the deploy MUST follow. End-of-turn without calling publish_site is a bug.`,
   };
@@ -861,6 +928,84 @@ async function handleWalletStatus(args, ctx) {
       usable: isWalletUsable(wallet),
       status: wallet.status ?? "active",
     },
+  };
+}
+
+async function handleAuthorizationStatus(args, ctx) {
+  const buyerId = args.buyerId || ctx.defaultBuyerId;
+  const wallet = await getWalletState(ctx, buyerId);
+  if (!wallet || !wallet.intentId) {
+    return {
+      buyerId,
+      status: "none",
+      authorization: null,
+      message: "No TouchID-bound intent is currently saved for this buyer.",
+    };
+  }
+
+  const amount = wallet.authorizedPerChargeAmount ?? wallet.amount ?? PAYMENT_AMOUNT;
+  const currency = wallet.authorizedPerChargeCurrency ?? wallet.currency ?? PAYMENT_CURRENCY;
+  const quantity = Number(wallet.mandateQuantity ?? MANDATE_QUANTITY);
+  const used = Number(wallet.mandateUsed ?? 0);
+  const remaining = Math.max(Number(wallet.mandateRemaining ?? (quantity - used)), 0);
+
+  return {
+    buyerId,
+    status: isWalletUsable(wallet) ? "active" : "expired_or_inactive",
+    authorization: {
+      intentId: wallet.intentId,
+      cardId: wallet.cardId ?? null,
+      tokenId: wallet.tokenId ?? null,
+      authorizedPerChargeAmount: amount,
+      currency,
+      mandateQuantity: quantity,
+      mandateUsed: used,
+      mandateRemaining: remaining,
+      maxTotalAuthorizedAmount: amount * quantity,
+      maxRemainingAuthorizedAmount: amount * remaining,
+      intentCreatedAt: wallet.intentCreatedAt ?? null,
+      intentExpiresAt: wallet.intentExpiresAt ?? null,
+      usable: isWalletUsable(wallet),
+      status: wallet.status ?? "active",
+      lastChargedAt: wallet.lastChargedAt ?? null,
+      lastPaymentRequestId: wallet.lastPaymentRequestId ?? null,
+      lastCryptogramId: wallet.lastCryptogramId ?? null,
+    },
+    answer: `Intent ${wallet.intentId} authorizes charges up to $${amount} ${currency} each, for up to ${quantity} charges total. ${remaining} charge(s) remain on this intent, so the remaining authorization envelope is up to $${amount * remaining} ${currency} until ${wallet.intentExpiresAt ? new Date(wallet.intentExpiresAt).toISOString().slice(0, 10) : "the intent expires"}.`,
+  };
+}
+
+async function handlePaymentProof(args, ctx) {
+  const buyerId = args.buyerId || ctx.defaultBuyerId;
+
+  if (args.paymentRequestId) {
+    const pr = await apiFetch(ctx, `/payment-requests/${encodeURIComponent(args.paymentRequestId)}`, { allow404: true });
+    if (!pr) throw new Error(`Unknown or expired paymentRequestId: ${args.paymentRequestId}.`);
+    if (pr.status !== "completed") {
+      return {
+        buyerId: pr.buyerId ?? buyerId,
+        status: pr.status ?? "unknown",
+        paymentRequestId: args.paymentRequestId,
+        proof: null,
+        message: `Payment request ${args.paymentRequestId} is not completed yet.`,
+      };
+    }
+    return {
+      buyerId: pr.buyerId ?? buyerId,
+      status: "completed",
+      paymentRequestId: args.paymentRequestId,
+      proof: paymentProofFromRecord(pr),
+    };
+  }
+
+  const wallet = await getWalletState(ctx, buyerId);
+  const proof = wallet?.lastPaymentProof ?? null;
+  return {
+    buyerId,
+    status: proof ? "completed" : "none",
+    paymentRequestId: proof?.paymentRequestId ?? wallet?.lastPaymentRequestId ?? null,
+    proof,
+    message: proof ? null : "No completed cryptogram proof is saved for this buyer yet.",
   };
 }
 
@@ -958,7 +1103,7 @@ function isWalletUsable(wallet) {
 async function saveWalletState(ctx, buyerId, wallet) {
   return apiFetch(ctx, `/subscriptions/${encodeURIComponent(buyerId)}`, {
     method: "POST",
-    body: wallet,
+    body: { ...wallet, status: "active", canceledAt: null },
   });
 }
 
@@ -982,7 +1127,7 @@ async function saveWalletState(ctx, buyerId, wallet) {
 //   - cryptogram type (DAVV / TAVV / CAVV)
 //   - cryptogram value preview (short value shown whole; long values masked)
 //   - cryptogram expires_at (how long this one-time credential is valid)
-function maskPaymentCredential(credential) {
+function maskPaymentCredential(credential, ctx = {}) {
   if (!credential || typeof credential !== "object") return null;
   if (process.env.AGENTIC_DEBUG_CRYPTOGRAM === "true") {
     log(`paymentCredential shape: ${describeKeyShape(credential).join(", ")}`);
@@ -1021,8 +1166,16 @@ function maskPaymentCredential(credential) {
     cryptogramId,
     cryptogramExpiresAt,
     cryptogramPreview: valuePreview,
+    cryptogramValue: shouldShowFullCryptogram(ctx) ? valueStr : null,
+    cryptogramValueShown: shouldShowFullCryptogram(ctx) && Boolean(valueStr),
     type: cryptogramType ? String(cryptogramType) : null,
   };
+}
+
+function shouldShowFullCryptogram(ctx = {}) {
+  if (process.env.AGENTIC_SHOW_FULL_CRYPTOGRAM !== "true") return false;
+  const env = String(ctx.defaultEnvironment ?? process.env.VGS_VAULT_ENV ?? "").toLowerCase();
+  return env === "sandbox";
 }
 
 // VGS returns cryptogram.data.id = INTENT_ID (echo); the real cryptogram id
@@ -1032,6 +1185,23 @@ function extractCryptogramId(cryptogramResponse) {
   return cryptogramResponse?.data?.attributes?.cryptogram?.id
     ?? cryptogramResponse?.data?.attributes?.id
     ?? null;
+}
+
+function paymentProofFromRecord(record) {
+  return {
+    paymentRequestId: record.id ?? record.paymentRequestId ?? null,
+    buyerId: record.buyerId ?? null,
+    cardId: record.cardId ?? null,
+    tokenId: record.tokenId ?? null,
+    intentId: record.intentId ?? null,
+    intentExpiresAt: record.intentExpiresAt ?? null,
+    cryptogramId: record.cryptogramId ?? record.paymentCredential?.cryptogramId ?? null,
+    paymentCredential: record.paymentCredential ?? null,
+    amount: record.amount ?? PAYMENT_AMOUNT,
+    currency: record.currency ?? PAYMENT_CURRENCY,
+    completedAt: record.completedAt ?? null,
+    reusedWallet: record.reusedWallet ?? null,
+  };
 }
 
 function describeKeyShape(obj, prefix = "", depth = 0, out = []) {
@@ -1368,6 +1538,8 @@ function formatToolText(name, result) {
   if (name === "publish_site") return formatPublishSite(result);
   if (name === "authorize_payment") return formatAuthorizePayment(result);
   if (name === "wallet_status") return formatWalletStatus(result);
+  if (name === "authorization_status") return formatAuthorizationStatus(result);
+  if (name === "payment_proof") return formatPaymentProof(result);
   if (name === "clear_wallet") return formatClearWallet(result);
   if (name === "add_buyer_card") return formatAddBuyerCard(result);
   if (name === "list_buyer_cards") return formatBuyerCards(result);
@@ -1533,6 +1705,60 @@ function formatWalletStatus(result) {
     `| Intent valid until | **${expiresStr}** |`,
     `| Status | ${w.usable ? "valid — fast-path enabled (no TouchID needed for next publish)" : "expired — next publish triggers fresh TouchID for a new intent"} |`,
   ].join("\n");
+}
+
+function formatAuthorizationStatus(result) {
+  if (!result.authorization) {
+    return `💳 No active authorization intent for \`${result.buyerId}\`.`;
+  }
+  const a = result.authorization;
+  const expiresStr = a.intentExpiresAt ? new Date(a.intentExpiresAt).toISOString().slice(0, 10) : "—";
+  return [
+    `🔐 **Authorization for \`${result.buyerId}\`**`,
+    "",
+    result.answer,
+    "",
+    "| | |",
+    "|---|---|",
+    `| Intent | \`${a.intentId}\` |`,
+    `| Authorized per charge | **$${a.authorizedPerChargeAmount} ${a.currency}** |`,
+    `| Mandate quantity | ${a.mandateQuantity} charge(s) |`,
+    `| Used / remaining | ${a.mandateUsed} used / ${a.mandateRemaining} remaining |`,
+    `| Remaining envelope | up to **$${a.maxRemainingAuthorizedAmount} ${a.currency}** across remaining charges |`,
+    `| Intent valid until | **${expiresStr}** |`,
+    `| Last cryptogram | ${a.lastCryptogramId ? `\`${a.lastCryptogramId}\`` : "—"} |`,
+    `| Status | ${a.usable ? "active — fast-path enabled" : "not currently usable"} |`,
+  ].join("\n");
+}
+
+function formatPaymentProof(result) {
+  if (!result.proof) {
+    return result.message ?? `No completed payment proof for \`${result.buyerId}\`.`;
+  }
+  const p = result.proof;
+  const cred = p.paymentCredential ?? {};
+  const lines = [
+    `🧾 **Payment proof for \`${result.buyerId}\`**`,
+    "",
+    "| | |",
+    "|---|---|",
+    `| Payment request | \`${p.paymentRequestId ?? result.paymentRequestId ?? "—"}\` |`,
+    `| Amount | **$${p.amount ?? PAYMENT_AMOUNT} ${p.currency ?? PAYMENT_CURRENCY}** |`,
+    `| Intent | \`${p.intentId ?? "—"}\` |`,
+    `| Cryptogram | \`${p.cryptogramId ?? cred.cryptogramId ?? "—"}\` |`,
+  ];
+  if (cred.type) lines.push(`| Type | ${cred.type} |`);
+  if (cred.cryptogramValueShown && cred.cryptogramValue) {
+    lines.push(`| Cryptogram value | \`${cred.cryptogramValue}\` |`);
+  } else if (cred.cryptogramPreview) {
+    lines.push(`| Cryptogram value | \`${cred.cryptogramPreview}\` _(masked)_ |`);
+  }
+  if (cred.dpanMasked) lines.push(`| DPAN | \`${cred.dpanMasked}\` |`);
+  if (cred.expiry) lines.push(`| DPAN expiry | ${cred.expiry} |`);
+  if (cred.cryptogramExpiresAt) lines.push(`| Cryptogram valid until | ${cred.cryptogramExpiresAt} |`);
+  if (p.intentExpiresAt) lines.push(`| Intent valid until | ${new Date(p.intentExpiresAt).toISOString().slice(0, 10)} |`);
+  if (p.completedAt) lines.push(`| Captured at | ${new Date(p.completedAt).toISOString()} |`);
+  return lines.join("\n");
 }
 
 function formatClearWallet(result) {

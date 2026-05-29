@@ -298,6 +298,56 @@ if (addCardRequestId && addCardSessionId) {
   await waitFor(() => messages.find((m) => m.id === 9), 4000);
 }
 
+subscriptions.set("demo-buyer", {
+  buyerId: "demo-buyer",
+  status: "active",
+  cardId: "CRD_auth_smoke",
+  tokenId: "tok_auth_smoke",
+  intentId: "int_auth_smoke",
+  intentCreatedAt: Date.now() - 1000,
+  intentExpiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
+  authorizedPerChargeAmount: 5,
+  authorizedPerChargeCurrency: "USD",
+  mandateQuantity: 1000,
+  mandateUsed: 1,
+  mandateRemaining: 999,
+  lastPaymentRequestId: "pr_proof_smoke",
+  lastCryptogramId: "cg_proof_smoke",
+  lastPaymentProof: {
+    paymentRequestId: "pr_proof_smoke",
+    buyerId: "demo-buyer",
+    cardId: "CRD_auth_smoke",
+    tokenId: "tok_auth_smoke",
+    intentId: "int_auth_smoke",
+    intentExpiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
+    cryptogramId: "cg_proof_smoke",
+    paymentCredential: {
+      dpanLast4: "4242",
+      dpanMasked: "••••-••••-••••-4242",
+      expiry: "12/27",
+      cryptogramId: "cg_proof_smoke",
+      cryptogramPreview: "abc1…xyz9",
+      type: "DAVV",
+    },
+    amount: 5,
+    currency: "USD",
+    completedAt: Date.now(),
+    reusedWallet: false,
+  },
+});
+
+send({
+  jsonrpc: "2.0", id: 10, method: "tools/call",
+  params: { name: "authorization_status", arguments: {} },
+});
+await waitFor(() => messages.find((m) => m.id === 10), 4000);
+
+send({
+  jsonrpc: "2.0", id: 11, method: "tools/call",
+  params: { name: "payment_proof", arguments: {} },
+});
+await waitFor(() => messages.find((m) => m.id === 11), 4000);
+
 child.kill();
 backend.close();
 
@@ -309,10 +359,12 @@ const resumedAuthResult = messages.find((m) => m.id === 6);
 const paidPublishResult = messages.find((m) => m.id === 7);
 const addCardWaitingResultFinal = messages.find((m) => m.id === 8);
 const addCardCompletedResult = messages.find((m) => m.id === 9);
+const authorizationStatusResult = messages.find((m) => m.id === 10);
+const paymentProofResult = messages.find((m) => m.id === 11);
 
 const expectedTools = [
   "create_marketing_site", "render_marketing_site", "publish_site", "authorize_payment",
-  "wallet_status", "clear_wallet", "add_buyer_card", "list_buyer_cards", "forget_card",
+  "wallet_status", "authorization_status", "payment_proof", "clear_wallet", "add_buyer_card", "list_buyer_cards", "forget_card",
 ];
 const gotTools = tools?.result?.tools?.map((t) => t.name).sort();
 const missing = expectedTools.filter((t) => !gotTools?.includes(t));
@@ -335,6 +387,9 @@ if (
   || addCardCompletedResult?.result?.structuredContent?.status !== "completed"
   || addCardCompletedResult?.result?.structuredContent?.card?.label !== "[VISA] ••••-••••-••••-1111 05/28"
   || merchantCards.get("demo-buyer")?.[0]?.cardId !== "CRD_add_smoke"
+  || authorizationStatusResult?.result?.structuredContent?.authorization?.intentId !== "int_auth_smoke"
+  || authorizationStatusResult?.result?.structuredContent?.authorization?.maxRemainingAuthorizedAmount !== 4995
+  || paymentProofResult?.result?.structuredContent?.proof?.cryptogramId !== "cg_proof_smoke"
 ) {
   console.error("Smoke checks failed.");
   console.error("Missing tools:", missing);
