@@ -9,7 +9,7 @@ The MCP server exposes the agency's product surface; the React app on the same s
 - **`create_marketing_site(params)`** / **`render_marketing_site(params)`** — renders the first preview from a small JSON params object. `create_marketing_site` is the preferred tool name for Codex CLI because it matches common prompts like "create a marketing site".
 - **`publish_site(params, buyerId?, paymentRequestId?)`** — publishes the preview after payment. First call returns `status: payment_required` with a `paymentRequestId`; second call with that completed request publishes `/s/<siteId>`.
 - **`authorize_payment(paymentRequestId)`** — triggers card collection when needed, runs device binding (TouchID / FIDO / OTP), and captures a one-time $5 cryptogram-backed charge.
-- **`wallet_status(buyerId?)`** / **`clear_wallet(buyerId?)`** — inspect or clear the buyer's reusable TouchID-bound payment intent.
+- **`wallet_status(buyerId?)`** / **`clear_wallet(buyerId?)`** — inspect or clear the buyer's latest TouchID-bound payment intent record.
 - **`authorization_status(buyerId?)`** — answers prompts like "how much are you authorized to spend?" from the saved intent and mandate limits.
 - **`payment_proof(buyerId?, paymentRequestId?)`** — shows the latest or requested cryptogram proof for demo narration.
 - **`add_buyer_card(buyerId?, cardRequestId?, waitForBrowser?)`** — opens the card collection form and saves a card without creating a payment request, TouchID intent, cryptogram, or charge.
@@ -62,7 +62,7 @@ It's the **402 pattern over MCP**, not prompt engineering:
 
 1. `publish_site(params, …)` returns `{ status: "payment_required", paymentRequestId, amount, savedCards, nextStep }`.
 2. If cards are saved, the agent shows all cards plus an "Add a new card" option and waits for the user's choice.
-3. After the user chooses, the agent calls `authorize_payment(paymentRequestId, cardId)` for a saved card, or `authorize_payment(paymentRequestId, useExistingCard:false)` to collect a new card. Internally this runs device binding when needed, creates/reuses the intent, gets a cryptogram, and sends the `APPROVED` transaction confirmation.
+3. After the user chooses, the agent calls `authorize_payment(paymentRequestId, cardId)` for a saved card, or `authorize_payment(paymentRequestId, useExistingCard:false)` to collect a new card. Internally this always runs device binding, creates a fresh intent, gets a cryptogram, and sends the `APPROVED` transaction confirmation.
 4. The agent retries `publish_site` with the same params and completed `paymentRequestId`, and gets `status: published`.
 
 The recurring mandate created on the VGS side has:
@@ -72,7 +72,7 @@ The recurring mandate created on the VGS side has:
 - `preferred_merchant_name: "Vellum"`
 - `merchant_category_code: 4816` (Computer Network Services)
 
-After the first cryptogram, subsequent $5 publish charges can reuse the same intent until it expires — the assurance is bound to the user's device for the life of the mandate.
+Every $5 publish charge asks for TouchID and creates a fresh intent. The latest intent is still stored for proof/status demos, but it is not used to skip biometric authentication.
 
 For stage demos, after a successful payment the user can ask:
 

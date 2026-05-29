@@ -112,9 +112,9 @@ const DEFAULT_POLL_MS = 1500;
 const PAYMENT_PLAN = "hosting-single-charge";
 const PAYMENT_AMOUNT = 5;
 const PAYMENT_CURRENCY = "USD";
-// The TouchID-bound intent is reusable until INTENT_DURATION_MS elapses.
-// MANDATE_QUANTITY is sent to VGS as the mandate's `quantity` field — set high
-// so the date is the effective limit (VGS still enforces both server-side).
+// Every publish intentionally creates a fresh TouchID-bound intent. The high
+// quantity is still sent in the VGS mandate so authorization_status can describe
+// the full envelope for demo narration.
 const MANDATE_QUANTITY = 1000;
 const INTENT_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -177,8 +177,8 @@ When the user asks you to make / build / generate a marketing site, follow this 
 
 5. Once the user confirms, call **publish_site** with the SAME params and NO \`paymentRequestId\` (the first call kicks off a fresh payment).
 
-6. publish_site returns status="payment_required" with a fresh \`paymentRequestId\`. It also includes \`savedCards\`, \`walletReady\` (boolean), and \`intentExpiresAt\` (ISO date or null). Branch:
-   - **\`savedCards\` has one or more cards**: show the complete payment-method list from the tool result, including the "Add a new card" option, and ask the user which payment method to use. Do NOT silently pick the first card and do NOT call authorize_payment until the user chooses. If the user picks a saved card, call **authorize_payment** with \`paymentRequestId\` and that exact \`cardId\`; the server reuses the current TouchID-bound intent only when the chosen card is the wallet card. If the user picks "Add a new card", call **authorize_payment** with \`paymentRequestId\` and \`useExistingCard:false\`.
+6. publish_site returns status="payment_required" with a fresh \`paymentRequestId\`. It also includes \`savedCards\`, \`walletReady\` (always false for publish), and \`intentExpiresAt\` (null for publish). Branch:
+   - **\`savedCards\` has one or more cards**: show the complete payment-method list from the tool result, including the "Add a new card" option, and ask the user which payment method to use. Do NOT silently pick the first card and do NOT call authorize_payment until the user chooses. If the user picks a saved card, call **authorize_payment** with \`paymentRequestId\` and that exact \`cardId\`; the server will still require TouchID and create a fresh intent for this payment. If the user picks "Add a new card", call **authorize_payment** with \`paymentRequestId\` and \`useExistingCard:false\`.
    - **\`savedCards\` is empty**: no card is on file. Do NOT ask for payment confirmation again — the user already approved the $5 charge in step 4. Print "No card on file — opening card form." and IMMEDIATELY call **authorize_payment** with \`useExistingCard:false\`. It will return status="waiting_for_card" with a URL; surface that URL to the user, then poll by calling authorize_payment again with the same paymentRequestId until the browser posts completion.
    - If authorize_payment returns "pending", this is a recoverable infrastructure/network interruption, NOT a declined or failed payment. Print a short "still pending, retrying" line, wait for retryAfterSeconds, then call authorize_payment AGAIN with the same paymentRequestId.
    - If authorize_payment returns "waiting_for_card" or "waiting_for_authentication", surface the URL to the user, wait a few seconds, then call authorize_payment AGAIN with the same paymentRequestId. The browser page posts completion to /api/sessions/:id; the repeated authorize_payment call reads it automatically. Do NOT ask the user to say "done" before polling.
@@ -221,7 +221,7 @@ When the user asks you to make / build / generate a marketing site, follow this 
 - **Do NOT pass paymentRequestId on the FIRST publish_site call** of a new site. That parameter is only for the second (post-payment) call. Passing it on the first call will fail.
 - **Do NOT reuse a paymentRequestId across sites.** Each site costs $5 and needs its own paymentRequestId. Reusing one fails with "already redeemed".
 - **Do NOT call publish_site before create_marketing_site/render_marketing_site.** The user must preview before paying.
-- **Do NOT mention "subscription" or "monthly".** This model is one-time-per-site. The wallet is just an authorization that lets us skip TouchID **while the intent is still valid** (i.e., before \`intentExpiresAt\`); it is not a flat-rate plan.`;
+- **Do NOT mention "subscription" or "monthly".** This model is one-time-per-site. The saved wallet is only proof/history of the latest authorization; every publish still requires TouchID and a fresh intent.`;
 
 function buildServerInstructions(clientMode) {
   if (clientMode !== "codex-cli") return SERVER_INSTRUCTIONS;
@@ -343,12 +343,12 @@ Two-step flow:
 
 **CRITICAL — must be the only tool call in your reply.** Never invoke authorize_payment twice in the same reply (parallel calls open the TouchID iframe twice and force the user to authenticate twice). Never invoke it in parallel with publish_site either. Issue ONE call, wait for the result, then continue in your NEXT reply.
 
-Fast path: if the buyer already has a TouchID-bound intent for the chosen card that is still within its validity window (the "wallet" — date check, no count), this just issues a fresh one-time cryptogram from VGS — no card collection, no re-authentication. Slow path (no usable intent yet, selected card differs from the current wallet card, or previous intent expired): uses the selected saved card or opens a card collection page, triggers device authentication (TouchID / FIDO / OTP) in a browser tab, creates a VGS intent valid for ~1 year, then issues the first cryptogram. Transient backend/network interruptions return status='pending' and should be retried with the same paymentRequestId. Terminal errors return isError=true. On success, returns status='completed' with cryptogramId, masked paymentCredential, and intentExpiresAt. After completion, call publish_site again with the SAME params AND paymentRequestId to publish the site.`,
+Every payment requires device authentication. Even if the buyer has a previous TouchID-bound intent saved in the wallet, authorize_payment opens the TouchID / FIDO / OTP browser step and creates a fresh intent for this $5 charge before issuing the one-time cryptogram. It uses the selected saved card or opens a card collection page. Transient backend/network interruptions return status='pending' and should be retried with the same paymentRequestId. Terminal errors return isError=true. On success, returns status='completed' with cryptogramId, masked paymentCredential, confirmation, and intentExpiresAt. After completion, call publish_site again with the SAME params AND paymentRequestId to publish the site.`,
       inputSchema: {
         paymentRequestId: z.string().describe("Returned by publish_site when status=payment_required."),
-        cardId: z.string().optional().describe("Explicit saved cardId chosen by the user. If it matches the active wallet card, the existing intent can be reused; if it differs, the server creates a fresh TouchID-bound intent for this card."),
+        cardId: z.string().optional().describe("Explicit saved cardId chosen by the user. The server still creates a fresh TouchID-bound intent for every payment."),
         useExistingCard: z.boolean().optional().describe("Set false to force a fresh card collection. Also forces the slow path (new wallet, new TouchID). Defaults to true."),
-        forceNewWallet: z.boolean().optional().describe("Set true to bypass the existing wallet and force a fresh TouchID + new intent, even if the current wallet has charges left. Defaults to false."),
+        forceNewWallet: z.boolean().optional().describe("Deprecated compatibility flag. Payments already always use fresh TouchID + a fresh intent."),
         consumerEmail: z.string().optional().describe("Consumer email used for token enrollment and OTP (slow path only)."),
         waitForBrowser: z.boolean().optional().describe("If true, block until browser steps finish. In Codex CLI, leave this false/omitted so the tool returns waiting_for_card or waiting_for_authentication immediately; then poll by calling again with the same paymentRequestId until the browser posts completion."),
       },
@@ -361,7 +361,7 @@ Fast path: if the buyer already has a TouchID-bound intent for the chosen card t
     "wallet_status",
     {
       title: "Show the buyer's payment wallet",
-      description: `Return the buyer's current payment wallet: cardId, intentId, and when the TouchID-bound intent expires. While today is before intentExpiresAt, publishes go through the fast path (no TouchID). Use this when the user asks "when do I need to re-authenticate" or "what card is on file".`,
+      description: `Return the buyer's latest payment wallet: cardId, intentId, and when that TouchID-bound intent expires. This is proof/history only; every new publish still requires fresh TouchID. Use this when the user asks "what intent is saved" or "what card is on file".`,
       inputSchema: {
         buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
       },
@@ -583,22 +583,14 @@ async function handlePublishSite(args, ctx) {
     },
   });
 
-  const wallet = await getWalletState(ctx, buyerId);
-  const savedCards = decorateSavedCardsForPayment(await getCardsForBuyer(ctx, buyerId), wallet);
-  const walletCard = savedCards.find((card) => card.isWalletCard) ?? null;
-  const savedCard = walletCard ?? savedCards[0] ?? null;
-  const walletReady = Boolean(walletCard?.walletReady);
-  const intentExpiresAt = walletReady ? Number(wallet.intentExpiresAt) : null;
-  const intentExpiresAtIso = intentExpiresAt ? new Date(intentExpiresAt).toISOString().slice(0, 10) : null;
+  const savedCards = decorateSavedCardsForPayment(await getCardsForBuyer(ctx, buyerId), null);
+  const savedCard = savedCards[0] ?? null;
 
   let nextStep;
   if (savedCards.length > 0) {
     const options = savedCards
       .map((card, index) => {
-        const intentHint = card.walletReady
-          ? `existing intent valid until ${card.intentExpiresAt}`
-          : "TouchID required";
-        return `${index + 1}. ${card.label} — cardId="${card.cardId}" (${intentHint})`;
+        return `${index + 1}. ${card.label} — cardId="${card.cardId}" (TouchID required)`;
       })
       .concat(`${savedCards.length + 1}. Add a new card`)
       .join("\n");
@@ -618,8 +610,8 @@ async function handlePublishSite(args, ctx) {
     savedCards,
     addNewCardOption: true,
     requiresPaymentMethodSelection: savedCards.length > 0,
-    walletReady,
-    intentExpiresAt: intentExpiresAtIso,
+    walletReady: false,
+    intentExpiresAt: null,
     nextStep,
   };
 }
@@ -692,42 +684,20 @@ async function handleAuthorizePayment(args, ctx) {
   const selectedCardId = flow.cardId ?? args.cardId ?? null;
   const isAddingNewCard = Boolean(flow.forceNewCard);
   const isResumingBrowserStep = previousStatus === "waiting_for_card" || previousStatus === "waiting_for_authentication";
-  let walletForFastPath = null;
   let savedCardsForSelection = null;
 
   if (!selectedCardId && !isAddingNewCard && !isResumingBrowserStep) {
-    walletForFastPath = await getWalletState(ctx, buyerId);
-    savedCardsForSelection = decorateSavedCardsForPayment(await getCardsForBuyer(ctx, buyerId), walletForFastPath);
+    savedCardsForSelection = decorateSavedCardsForPayment(await getCardsForBuyer(ctx, buyerId), null);
     if (savedCardsForSelection.length > 0) {
       return paymentMethodRequiredResponse(paymentRequestId, buyerId, pr, savedCardsForSelection);
     }
   }
 
-  // --- Fast path: existing wallet still has charges left on the TouchID-bound
-  // intent for the selected card. Skip collect + binding + intent creation;
-  // just request a fresh one-time cryptogram from VGS for this $5 charge (may
-  // also need polling).
-  const walletCardWasOffered = Boolean(selectedCardId)
-    || savedCardsForSelection === null
-    || savedCardsForSelection.some((card) => card.isWalletCard);
-  if (!flow.forceNewCard && walletCardWasOffered && args.forceNewWallet !== true && args.useExistingCard !== false) {
-    const wallet = walletForFastPath ?? await getWalletState(ctx, buyerId);
-    if (isWalletUsable(wallet) && (!selectedCardId || selectedCardId === wallet.cardId)) {
-      flow.cardId = wallet.cardId;
-      flow.tokenId = wallet.tokenId;
-      flow.intentId = wallet.intentId;
-      flow.intentCreatedAt = wallet.intentCreatedAt;
-      flow.intentExpiresAt = wallet.intentExpiresAt;
-      flow.reusedWallet = true;
-      return await attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr);
-    }
-  }
-
-  // --- Slow path: full ceremony (no wallet yet, or wallet exhausted / expired).
+  // Always run the full ceremony for each payment so TouchID is requested every time.
   let cardId = selectedCardId;
   if (!cardId && !flow.forceNewCard) {
     const cards = savedCardsForSelection
-      ?? decorateSavedCardsForPayment(await getCardsForBuyer(ctx, buyerId), await getWalletState(ctx, buyerId));
+      ?? decorateSavedCardsForPayment(await getCardsForBuyer(ctx, buyerId), null);
     if (cards.length > 0) {
       return paymentMethodRequiredResponse(paymentRequestId, buyerId, pr, cards);
     }
@@ -778,6 +748,13 @@ async function handleAuthorizePayment(args, ctx) {
   }
 
   let tokenId = flow.tokenId;
+  if (!tokenId && cardId && !flow.forceNewCard) {
+    const wallet = await getWalletState(ctx, buyerId);
+    if (wallet?.cardId === cardId && wallet.tokenId) {
+      tokenId = wallet.tokenId;
+      flow.tokenId = tokenId;
+    }
+  }
   if (!tokenId) {
     const token = await enrollAgenticToken(ctx, cardId, consumerEmail);
     tokenId = token?.data?.id;
@@ -1000,7 +977,7 @@ async function confirmPaymentAndFinalize(ctx, paymentRequestId, flow, pr) {
     amount,
     currency,
     reusedWallet,
-    nextStep: `Payment is captured — deploy is now MANDATORY. Do all of the following in THIS SAME TURN, in this exact order:\n\n1. Print this EXACT success line:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, ${reusedWallet ? "fast-path — no TouchID needed, existing intent" : "first charge on a fresh TouchID-bound intent"} valid until ${new Date(intentExpiresAt).toISOString().slice(0, 10)}).\n\n2. On the next line, print exactly:\n\n🚀 Starting deploy…\n\n3. IMMEDIATELY call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}". Do NOT stop, do NOT ask the user for permission — the user already paid, the deploy MUST follow. End-of-turn without calling publish_site is a bug.`,
+    nextStep: `Payment is captured — deploy is now MANDATORY. Do all of the following in THIS SAME TURN, in this exact order:\n\n1. Print this EXACT success line:\n\n✅ Payment successful — $${pr.amount ?? PAYMENT_AMOUNT} ${pr.currency ?? PAYMENT_CURRENCY} charged on card ending ${maskedCredential?.dpanLast4 ?? "—"} (cryptogram \`${cryptogramId}\`, fresh TouchID-bound intent valid until ${new Date(intentExpiresAt).toISOString().slice(0, 10)}).\n\n2. On the next line, print exactly:\n\n🚀 Starting deploy…\n\n3. IMMEDIATELY call publish_site with the SAME params AND paymentRequestId="${paymentRequestId}". Do NOT stop, do NOT ask the user for permission — the user already paid, the deploy MUST follow. End-of-turn without calling publish_site is a bug.`,
   };
 }
 
@@ -1064,7 +1041,7 @@ async function handleAuthorizationStatus(args, ctx) {
       lastPaymentRequestId: wallet.lastPaymentRequestId ?? null,
       lastCryptogramId: wallet.lastCryptogramId ?? null,
     },
-    answer: `Intent ${wallet.intentId} authorizes charges up to $${amount} ${currency} each, for up to ${quantity} charges total. ${remaining} charge(s) remain on this intent, so the remaining authorization envelope is up to $${amount * remaining} ${currency} until ${wallet.intentExpiresAt ? new Date(wallet.intentExpiresAt).toISOString().slice(0, 10) : "the intent expires"}.`,
+    answer: `Intent ${wallet.intentId} authorizes charges up to $${amount} ${currency} each, for up to ${quantity} charges total. ${remaining} charge(s) remain on this intent, so the remaining authorization envelope is up to $${amount * remaining} ${currency} until ${wallet.intentExpiresAt ? new Date(wallet.intentExpiresAt).toISOString().slice(0, 10) : "the intent expires"}. Current demo policy still requires fresh TouchID and a fresh intent for every new payment.`,
   };
 }
 
@@ -1618,12 +1595,7 @@ function deriveAppBaseUrl(apiBaseUrl) {
 
 function paymentMethodRequiredResponse(paymentRequestId, buyerId, paymentRequest, savedCards) {
   const options = savedCards
-    .map((card, index) => {
-      const intentHint = card.walletReady
-        ? `existing intent valid until ${card.intentExpiresAt}`
-        : "TouchID required";
-      return `${index + 1}. ${card.label} — cardId="${card.cardId}" (${intentHint})`;
-    })
+    .map((card, index) => `${index + 1}. ${card.label} — cardId="${card.cardId}" (TouchID required)`)
     .concat(`${savedCards.length + 1}. Add a new card`)
     .join("\n");
 
@@ -1805,7 +1777,7 @@ function formatPublishSite(result) {
       `| Amount | **$${result.amount} ${result.currency}** (one-time) |`,
       `| Payment request | \`${result.paymentRequestId}\` |`,
       `| Saved cards | ${savedCards.length > 0 ? `${savedCards.length} on file` : "_none — collection step required_"} |`,
-      `| Current intent | ${result.walletReady ? `valid until **${result.intentExpiresAt}** — no TouchID needed for its card` : "_no usable intent — fresh TouchID required_"} |`,
+      `| TouchID | fresh authentication required for this publish |`,
       "",
     ];
     if (savedCards.length > 0) {
@@ -1845,9 +1817,7 @@ function formatPaymentMethodRequired(result) {
 function formatPaymentMethodTable(cards) {
   const header = "| # | Card | ID | Next step |\n|---|---|---|---|";
   const rows = cards.map((card, index) => {
-    const nextStep = card.walletReady
-      ? `Use existing intent until **${card.intentExpiresAt}**`
-      : "Fresh TouchID required";
+    const nextStep = "Fresh TouchID required";
     return `| **${index + 1}** | ${card.label} | \`${card.cardId}\` | ${nextStep} |`;
   });
   return `${header}\n${rows.join("\n")}`;
@@ -1885,7 +1855,7 @@ function formatAuthorizePayment(result) {
       "| | |",
       "|---|---|",
       `| Card | \`${result.cardId ?? "—"}\` |`,
-      `| Intent | \`${result.intentId ?? "—"}\` ${result.reusedWallet ? "(reused — same TouchID-bound intent)" : "(fresh — first charge on this wallet)"} |`,
+      `| Intent | \`${result.intentId ?? "—"}\` (fresh — created by this TouchID) |`,
       `| **Cryptogram** | \`${result.cryptogramId ?? "—"}\` — **one-time, single-use** |`,
     ];
     if (cred.dpanMasked) lines.push(`| DPAN | \`${cred.dpanMasked}\` |`);
@@ -1898,7 +1868,7 @@ function formatAuthorizePayment(result) {
     if (result.confirmedAt) lines.push(`| Confirmed at | ${result.confirmedAt} |`);
     if (result.intentExpiresAt) {
       const dateStr = new Date(result.intentExpiresAt).toISOString().slice(0, 10);
-      lines.push(`| Intent valid until | **${dateStr}** ${result.reusedWallet ? "(reused — no TouchID this time)" : "(fresh — created by this TouchID)"} |`);
+      lines.push(`| Intent valid until | **${dateStr}** (fresh — created by this TouchID) |`);
     }
     lines.push("", `_${result.nextStep}_`);
     return lines.join("\n");
@@ -1941,7 +1911,7 @@ function formatWalletStatus(result) {
     `| Card | \`${w.cardId ?? "—"}\` |`,
     `| Intent | \`${w.intentId}\` |`,
     `| Intent valid until | **${expiresStr}** |`,
-    `| Status | ${w.usable ? "valid — fast-path enabled (no TouchID needed for next publish)" : "expired — next publish triggers fresh TouchID for a new intent"} |`,
+    `| Status | ${w.usable ? "valid — stored for proof/history; next publish still requires fresh TouchID" : "expired or inactive — next publish requires fresh TouchID"} |`,
   ].join("\n");
 }
 
@@ -1965,7 +1935,7 @@ function formatAuthorizationStatus(result) {
     `| Remaining envelope | up to **$${a.maxRemainingAuthorizedAmount} ${a.currency}** across remaining charges |`,
     `| Intent valid until | **${expiresStr}** |`,
     `| Last cryptogram | ${a.lastCryptogramId ? `\`${a.lastCryptogramId}\`` : "—"} |`,
-    `| Status | ${a.usable ? "active — fast-path enabled" : "not currently usable"} |`,
+    `| Status | ${a.usable ? "active — stored for proof/history; new payments still require fresh TouchID" : "not currently usable"} |`,
   ].join("\n");
 }
 
