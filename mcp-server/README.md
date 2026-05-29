@@ -10,6 +10,7 @@ The MCP server exposes the agency's product surface; the React app on the same s
 - **`publish_site(params, buyerId?, paymentRequestId?)`** — publishes the preview after payment. First call returns `status: payment_required` with a `paymentRequestId`; second call with that completed request publishes `/s/<siteId>`.
 - **`authorize_payment(paymentRequestId)`** — triggers card collection when needed, runs device binding (TouchID / FIDO / OTP), and captures a one-time $5 cryptogram-backed charge.
 - **`wallet_status(buyerId?)`** / **`clear_wallet(buyerId?)`** — inspect or clear the buyer's reusable TouchID-bound payment intent.
+- **`add_buyer_card(buyerId?, cardRequestId?, waitForBrowser?)`** — opens the card collection form and saves a card without creating a payment request, TouchID intent, cryptogram, or charge.
 - **`list_buyer_cards(buyerId?)`** / **`forget_card(buyerId?, cardId?)`** — card management.
 
 Built on `@modelcontextprotocol/sdk@^1.29`. Two transports ship together:

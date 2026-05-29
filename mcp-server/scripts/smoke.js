@@ -9,6 +9,8 @@ import { createServer } from "node:http";
 const sites = new Map();
 const subscriptions = new Map();
 const paymentRequests = new Map();
+const sessions = new Map();
+const merchantCards = new Map();
 let transientTokenEnrollmentFailures = 1;
 
 const backend = createServer(async (req, res) => {
@@ -83,9 +85,35 @@ const backend = createServer(async (req, res) => {
     }
   }
 
-  // /api/merchant/cards/:buyerId — return no cards so the smoke flow doesn't run the binding step
-  if (/^\/api\/merchant\/cards\/[^/]+$/.test(url.pathname) && req.method === "GET") {
-    return send(200, { buyerId: url.pathname.split("/").pop(), cards: [] });
+  const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+  if (sessionMatch) {
+    const sessionId = sessionMatch[1];
+    if (req.method === "GET") {
+      const session = sessions.get(sessionId);
+      if (!session) return send(404, { status: "pending" });
+      return send(200, { status: "completed", ...session });
+    }
+    if (req.method === "POST") {
+      const data = JSON.parse(body);
+      sessions.set(sessionId, data);
+      return send(200, { ok: true });
+    }
+  }
+
+  const merchantCardsMatch = url.pathname.match(/^\/api\/merchant\/cards\/([^/]+)$/);
+  if (merchantCardsMatch) {
+    const buyerId = merchantCardsMatch[1];
+    const existing = merchantCards.get(buyerId) ?? [];
+    if (req.method === "GET") {
+      return send(200, { buyerId, cards: existing });
+    }
+    if (req.method === "POST") {
+      const card = JSON.parse(body);
+      const next = existing.filter((c) => c.cardId !== card.cardId);
+      next.unshift({ ...card, savedAt: Date.now() });
+      merchantCards.set(buyerId, next);
+      return send(200, { buyerId, cards: next });
+    }
   }
 
   // /api/cards/:cardId/agentic-tokens — fail once like a transient socket/runtime
@@ -245,6 +273,31 @@ if (paymentRequestId) {
   await waitFor(() => messages.find((m) => m.id === 7), 4000);
 }
 
+send({
+  jsonrpc: "2.0", id: 8, method: "tools/call",
+  params: { name: "add_buyer_card", arguments: {} },
+});
+await waitFor(() => messages.find((m) => m.id === 8), 4000);
+
+const addCardWaitingResult = messages.find((m) => m.id === 8);
+const addCardRequestId = addCardWaitingResult?.result?.structuredContent?.cardRequestId;
+const addCardSessionId = addCardWaitingResult?.result?.structuredContent?.collect?.sessionId;
+if (addCardRequestId && addCardSessionId) {
+  sessions.set(addCardSessionId, {
+    buyerId: "demo-buyer",
+    cardId: "CRD_add_smoke",
+    lastFour: "1111",
+    brand: "VISA",
+    expMonth: "05",
+    expYear: "28",
+  });
+  send({
+    jsonrpc: "2.0", id: 9, method: "tools/call",
+    params: { name: "add_buyer_card", arguments: { cardRequestId: addCardRequestId } },
+  });
+  await waitFor(() => messages.find((m) => m.id === 9), 4000);
+}
+
 child.kill();
 backend.close();
 
@@ -254,10 +307,12 @@ const publishResult = messages.find((m) => m.id === 4);
 const transientAuthResult = messages.find((m) => m.id === 5);
 const resumedAuthResult = messages.find((m) => m.id === 6);
 const paidPublishResult = messages.find((m) => m.id === 7);
+const addCardWaitingResultFinal = messages.find((m) => m.id === 8);
+const addCardCompletedResult = messages.find((m) => m.id === 9);
 
 const expectedTools = [
   "create_marketing_site", "render_marketing_site", "publish_site", "authorize_payment",
-  "wallet_status", "clear_wallet", "list_buyer_cards", "forget_card",
+  "wallet_status", "clear_wallet", "add_buyer_card", "list_buyer_cards", "forget_card",
 ];
 const gotTools = tools?.result?.tools?.map((t) => t.name).sort();
 const missing = expectedTools.filter((t) => !gotTools?.includes(t));
@@ -275,6 +330,11 @@ if (
   || resumedAuthResult?.result?.structuredContent?.status !== "waiting_for_authentication"
   || paidPublishResult?.result?.structuredContent?.status !== "published"
   || !paidPublishResult?.result?.structuredContent?.url
+  || addCardWaitingResultFinal?.result?.structuredContent?.status !== "waiting_for_card"
+  || !addCardWaitingResultFinal?.result?.structuredContent?.cardRequestId
+  || addCardCompletedResult?.result?.structuredContent?.status !== "completed"
+  || addCardCompletedResult?.result?.structuredContent?.card?.label !== "[VISA] ••••-••••-••••-1111 05/28"
+  || merchantCards.get("demo-buyer")?.[0]?.cardId !== "CRD_add_smoke"
 ) {
   console.error("Smoke checks failed.");
   console.error("Missing tools:", missing);

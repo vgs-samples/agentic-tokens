@@ -222,6 +222,7 @@ This server is running for Codex CLI. Assume there is no in-app browser and no a
 - After create_marketing_site/render_marketing_site returns, surface the returned previewUrl or previewPath directly to the user. If previewPath is present, it is already a local HTML preview written by the server.
 - Do not claim that a browser was opened unless the tool result says opened=true.
 - For waiting_for_card and waiting_for_authentication, paste the returned URL. If the tool result says opened=true, tell the user the browser was opened and ask them to complete the browser step there. If opened=false, ask them to open the URL manually. Then poll automatically by calling authorize_payment again with the same paymentRequestId after the tool result's retryAfterSeconds. Do NOT ask the user to say "done"; the browser posts completion to /api/sessions/:id and authorize_payment reads it on the next poll.
+- For add_buyer_card, paste the returned collect URL and poll by calling add_buyer_card again with the same cardRequestId after retryAfterSeconds. This card-only flow does not create a payment request, TouchID intent, cryptogram, or charge.
 - Never pass waitForBrowser=true in Codex CLI. Let authorize_payment return waiting_for_card / waiting_for_authentication immediately, then keep polling authorize_payment until the browser step completion appears.
 - Do not block waiting for browser completion in Codex CLI. The server defaults to non-blocking URL handoff in this mode.`;
 }
@@ -367,6 +368,21 @@ Fast path: if the buyer already has a TouchID-bound intent that is still within 
       annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     (args) => wrapToolResult("clear_wallet", () => handleClearWallet(args, ctx)),
+  );
+
+  server.registerTool(
+    "add_buyer_card",
+    {
+      title: "Add a saved card",
+      description: "Open the card collection form and save a card to the buyer's file without creating a payment request, TouchID intent, cryptogram, or charge. First call without cardRequestId starts the browser flow; if it returns status='waiting_for_card', call add_buyer_card again with the same cardRequestId to poll completion.",
+      inputSchema: {
+        buyerId: z.string().optional().describe("Merchant-side buyer id. Defaults to demo-buyer."),
+        cardRequestId: z.string().optional().describe("Returned by the first add_buyer_card call when status=waiting_for_card. Pass it on later calls to poll the browser session."),
+        waitForBrowser: z.boolean().optional().describe("If true, block until the browser card form finishes. In Codex CLI, leave this false/omitted so the tool returns waiting_for_card immediately; then poll by calling add_buyer_card again with cardRequestId."),
+      },
+      annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    (args) => wrapToolResult("add_buyer_card", () => handleAddBuyerCard(args, ctx)),
   );
 
   server.registerTool(
@@ -644,6 +660,7 @@ async function handleAuthorizePayment(args, ctx) {
     }
     cardId = cardSession.cardId;
     if (!cardId) throw new Error("Card collection completed without cardId.");
+    await saveCollectedCard(ctx, buyerId, cardSession);
     flow.cardId = cardId;
   }
 
@@ -668,6 +685,7 @@ async function handleAuthorizePayment(args, ctx) {
     const cardSession = await waitForSession(ctx, sessionId, ctx.waitMs);
     cardId = cardSession.cardId;
     if (!cardId) throw new Error("Card collection completed without cardId.");
+    await saveCollectedCard(ctx, buyerId, cardSession);
     flow.cardId = cardId;
   }
 
@@ -852,6 +870,55 @@ async function handleClearWallet(args, ctx) {
   return { buyerId, cleared: Boolean(response?.deleted) };
 }
 
+async function handleAddBuyerCard(args, ctx) {
+  const buyerId = args.buyerId || ctx.defaultBuyerId;
+  const waitForBrowser = ctx.clientMode === "codex-cli"
+    ? false
+    : (args.waitForBrowser ?? ctx.defaultWaitForBrowser);
+
+  const cardRequestId = args.cardRequestId || createId("card_request");
+  let flow = await ctx.requestStore.get(cardRequestId);
+
+  if (args.cardRequestId && !flow) {
+    const recoveredSession = await apiFetch(ctx, `/sessions/${encodeURIComponent(cardSessionId(cardRequestId))}`, { allow404: true });
+    if (recoveredSession?.status === "completed") {
+      return await completeAddBuyerCard(ctx, { cardRequestId, buyerId }, recoveredSession);
+    }
+    throw new Error(`Unknown or expired cardRequestId: ${cardRequestId}. Start a new add_buyer_card call without cardRequestId.`);
+  }
+
+  if (!flow) {
+    const sessionId = cardSessionId(cardRequestId);
+    const collectUrl = buildAppUrl(ctx, "/collect.html", { sessionId, buyer_id: buyerId });
+    const opened = ctx.openBrowser(collectUrl);
+    flow = {
+      cardRequestId,
+      buyerId,
+      status: "waiting_for_card",
+      collect: { sessionId, url: collectUrl, opened },
+      createdAt: Date.now(),
+    };
+    await ctx.requestStore.set(cardRequestId, flow);
+  }
+
+  const collect = flow.collect;
+  if (!collect?.sessionId) throw new Error(`Card request ${cardRequestId} has no browser session.`);
+
+  const cardSession = waitForBrowser
+    ? await waitForSession(ctx, collect.sessionId, ctx.waitMs)
+    : await apiFetch(ctx, `/sessions/${encodeURIComponent(collect.sessionId)}`, { allow404: true });
+
+  if (!cardSession) {
+    await ctx.requestStore.set(cardRequestId, { ...flow, status: "waiting_for_card" });
+    return waitingAddCardResponse(cardRequestId, buyerId, collect,
+      collect.opened
+        ? "Complete the opened card form and save a card."
+        : "Open the card form and save a card.");
+  }
+
+  return await completeAddBuyerCard(ctx, flow, cardSession);
+}
+
 async function handleListBuyerCards(args, ctx) {
   const buyerId = args.buyerId || ctx.defaultBuyerId;
   const cards = await getCardsForBuyer(ctx, buyerId);
@@ -989,6 +1056,43 @@ async function getCardsForBuyer(ctx, buyerId) {
     log(`getCardsForBuyer fallback: ${err.message}`);
     return [];
   }
+}
+
+async function completeAddBuyerCard(ctx, flow, cardSession) {
+  const buyerId = flow.buyerId || cardSession.buyerId || ctx.defaultBuyerId;
+  const card = await saveCollectedCard(ctx, buyerId, cardSession);
+  await ctx.requestStore.delete(flow.cardRequestId);
+  return {
+    status: "completed",
+    cardRequestId: flow.cardRequestId,
+    buyerId,
+    card,
+    nextStep: `Card saved for ${buyerId}. You can call list_buyer_cards to show all saved cards.`,
+  };
+}
+
+async function saveCollectedCard(ctx, buyerId, cardSession) {
+  const card = cardSurfaceFromSession(cardSession);
+  if (!card.cardId) throw new Error("Card collection completed without cardId.");
+  await apiFetch(ctx, `/merchant/cards/${encodeURIComponent(buyerId)}`, {
+    method: "POST",
+    body: card,
+  });
+  return { ...card, label: formatCardLabel(card) };
+}
+
+function cardSurfaceFromSession(cardSession) {
+  return {
+    cardId: cardSession.cardId ?? null,
+    lastFour: cardSession.lastFour ?? null,
+    brand: cardSession.brand ?? null,
+    expMonth: cardSession.expMonth ?? null,
+    expYear: cardSession.expYear ?? null,
+  };
+}
+
+function cardSessionId(cardRequestId) {
+  return `add-card-${cardRequestId}`;
 }
 
 async function enrollAgenticToken(ctx, cardId, consumerEmail) {
@@ -1188,6 +1292,18 @@ function waitingResponse(status, paymentRequestId, collect, binding, message) {
   };
 }
 
+function waitingAddCardResponse(cardRequestId, buyerId, collect, message) {
+  return {
+    status: "waiting_for_card",
+    cardRequestId,
+    buyerId,
+    collect,
+    message,
+    retryAfterSeconds: BROWSER_HANDOFF_POLL_SECONDS,
+    nextStep: `Surface the browser URL (${collect.url}), wait ~${BROWSER_HANDOFF_POLL_SECONDS} seconds, then call add_buyer_card again with cardRequestId="${cardRequestId}". Do not ask the user to say "done"; the browser page posts completion to /api/sessions/:id and this tool reads it automatically on the next call.`,
+  };
+}
+
 // --- Result formatting ---
 
 async function wrapToolResult(name, fn, args = {}) {
@@ -1241,6 +1357,7 @@ function formatToolText(name, result) {
   if (name === "authorize_payment") return formatAuthorizePayment(result);
   if (name === "wallet_status") return formatWalletStatus(result);
   if (name === "clear_wallet") return formatClearWallet(result);
+  if (name === "add_buyer_card") return formatAddBuyerCard(result);
   if (name === "list_buyer_cards") return formatBuyerCards(result);
   if (name === "forget_card") return formatForgetCard(result);
   return JSON.stringify(result);
@@ -1410,6 +1527,40 @@ function formatClearWallet(result) {
   return result.cleared
     ? `🗑️ Wallet cleared for \`${result.buyerId}\` — next publish will trigger a fresh TouchID.`
     : `ℹ️ No wallet on file for \`${result.buyerId}\`.`;
+}
+
+function formatAddBuyerCard(result) {
+  if (result.status === "waiting_for_card") {
+    const handoff = result.collect || {};
+    const browserLine = handoff.opened
+      ? "Browser opened. Complete the card form there:"
+      : "Open the card form in your browser:";
+    const retry = result.retryAfterSeconds ?? BROWSER_HANDOFF_POLL_SECONDS;
+    return [
+      `⏳ **Waiting for card**`,
+      "",
+      browserLine,
+      handoff.url,
+      result.message ? `\n${result.message}` : "",
+      "",
+      `Wait ~${retry}s, then call add_buyer_card again with \`cardRequestId="${result.cardRequestId}"\`. Do not ask the user to say "done"; completion is read automatically from the browser session.`,
+    ].join("\n");
+  }
+
+  if (result.status === "completed") {
+    return [
+      `💳 **Card saved for \`${result.buyerId}\`**`,
+      "",
+      "| | |",
+      "|---|---|",
+      `| Card | ${result.card.label} |`,
+      `| ID | \`${result.card.cardId}\` |`,
+      "",
+      `_${result.nextStep}_`,
+    ].join("\n");
+  }
+
+  return JSON.stringify(result);
 }
 
 function formatBuyerCards(result) {
