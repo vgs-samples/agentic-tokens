@@ -134,6 +134,11 @@ await new Promise((resolve) => backend.listen(0, resolve));
 const port = backend.address().port;
 const baseUrl = `http://127.0.0.1:${port}`;
 
+merchantCards.set("demo-buyer", [
+  { cardId: "CRD_smoke", lastFour: "4242", brand: "VISA", expMonth: "12", expYear: "27", savedAt: Date.now() - 2000 },
+  { cardId: "CRD_backup_smoke", lastFour: "2222", brand: "MASTERCARD", expMonth: "06", expYear: "29", savedAt: Date.now() - 1000 },
+]);
+
 const child = spawn(process.execPath, ["src/index.js"], {
   cwd: new URL("..", import.meta.url),
   env: {
@@ -377,6 +382,8 @@ if (
   || renderResult?.result?.structuredContent?.opened !== false
   || publishResult?.result?.structuredContent?.status !== "payment_required"
   || !publishResult?.result?.structuredContent?.paymentRequestId
+  || publishResult?.result?.structuredContent?.savedCards?.length !== 2
+  || publishResult?.result?.structuredContent?.requiresPaymentMethodSelection !== true
   || transientAuthResult?.result?.structuredContent?.status !== "pending"
   || transientAuthResult?.result?.isError !== false
   || resumedAuthResult?.result?.structuredContent?.status !== "waiting_for_authentication"

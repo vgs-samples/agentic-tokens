@@ -60,9 +60,9 @@ This means:
 
 It's the **402 pattern over MCP**, not prompt engineering:
 
-1. `publish_site(params, …)` returns `{ status: "payment_required", paymentRequestId, amount, plan, description, nextStep }`.
-2. Any decent LLM reads `nextStep` and surfaces the question to the user.
-3. After the user agrees, the agent calls `authorize_payment(paymentRequestId)` — that tool runs card collection if needed, VGS binding, intent creation, and cryptogram capture.
+1. `publish_site(params, …)` returns `{ status: "payment_required", paymentRequestId, amount, savedCards, nextStep }`.
+2. If cards are saved, the agent shows all cards plus an "Add a new card" option and waits for the user's choice.
+3. After the user chooses, the agent calls `authorize_payment(paymentRequestId, cardId)` for a saved card, or `authorize_payment(paymentRequestId, useExistingCard:false)` to collect a new card.
 4. The agent retries `publish_site` with the same params and completed `paymentRequestId`, and gets `status: published`.
 
 The recurring mandate created on the VGS side has:
