@@ -1074,11 +1074,21 @@ async function completeAddBuyerCard(ctx, flow, cardSession) {
 async function saveCollectedCard(ctx, buyerId, cardSession) {
   const card = cardSurfaceFromSession(cardSession);
   if (!card.cardId) throw new Error("Card collection completed without cardId.");
-  await apiFetch(ctx, `/merchant/cards/${encodeURIComponent(buyerId)}`, {
+  const response = await apiFetch(ctx, `/merchant/cards/${encodeURIComponent(buyerId)}`, {
     method: "POST",
     body: card,
   });
-  return { ...card, label: formatCardLabel(card) };
+  const savedCard = Array.isArray(response?.cards)
+    ? response.cards.find((c) => c.cardId === card.cardId)
+    : null;
+  const displayCard = savedCard ?? {
+    cardId: card.cardId,
+    lastFour: card.lastFour,
+    brand: card.brand,
+    expMonth: card.expMonth,
+    expYear: card.expYear,
+  };
+  return { ...displayCard, label: formatCardLabel(displayCard) };
 }
 
 function cardSurfaceFromSession(cardSession) {
@@ -1088,6 +1098,8 @@ function cardSurfaceFromSession(cardSession) {
     brand: cardSession.brand ?? null,
     expMonth: cardSession.expMonth ?? null,
     expYear: cardSession.expYear ?? null,
+    bin: cardSession.bin ?? null,
+    first8: cardSession.first8 ?? null,
   };
 }
 

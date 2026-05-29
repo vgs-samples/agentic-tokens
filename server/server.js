@@ -144,6 +144,7 @@ app.post("/api/merchant/cards/:buyerId", handler(async (req, res) => {
   const { cardId } = req.body;
   if (!cardId) return res.status(400).json({ error: "cardId required" });
   const surface = await enrichCardSurface(req.body, { force: true });
+  debugMerchantCard("save", req.params.buyerId, req.body, surface);
   const existing = merchantCards.get(req.params.buyerId) ?? [];
   // Dedup by cardId — re-saving the same card just refreshes its position.
   const next = existing.filter((c) => c.cardId !== cardId);
@@ -176,6 +177,21 @@ app.delete("/api/merchant/cards/:buyerId", (req, res) => {
 app.get("/api/merchant/cards", (req, res) => {
   res.json(Object.fromEntries(merchantCards));
 });
+
+function debugMerchantCard(stage, buyerId, body, surface) {
+  if (process.env.AGENTIC_DEBUG_CARD_SURFACE !== "true") return;
+  console.log(`[merchant-card:${stage}] ${JSON.stringify({
+    buyerId,
+    input: {
+      cardId: body.cardId ?? null,
+      lastFour: body.lastFour ?? null,
+      brand: body.brand ?? null,
+      expMonth: body.expMonth ?? null,
+      expYear: body.expYear ?? null,
+    },
+    surface,
+  })}`);
+}
 
 // --- Start ---
 

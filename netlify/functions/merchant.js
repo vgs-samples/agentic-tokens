@@ -40,6 +40,7 @@ export default wrap(async (req) => {
     const body = await req.json().catch(() => ({}));
     if (!body.cardId) return json(400, { error: "cardId required" });
     const surface = await enrichCardSurface(body, { force: true });
+    debugMerchantCard("save", buyerId, body, surface);
     const current = await store.get(buyerId, { type: "json" });
     const existing = Array.isArray(current?.cards) ? current.cards : [];
     const next = existing.filter((c) => c.cardId !== body.cardId);
@@ -74,3 +75,18 @@ export default wrap(async (req) => {
 
   return json(405, { error: `Method ${req.method} not allowed` });
 });
+
+function debugMerchantCard(stage, buyerId, body, surface) {
+  if (process.env.AGENTIC_DEBUG_CARD_SURFACE !== "true") return;
+  console.log(`[merchant-card:${stage}] ${JSON.stringify({
+    buyerId,
+    input: {
+      cardId: body.cardId ?? null,
+      lastFour: body.lastFour ?? null,
+      brand: body.brand ?? null,
+      expMonth: body.expMonth ?? null,
+      expYear: body.expYear ?? null,
+    },
+    surface,
+  })}`);
+}

@@ -53,7 +53,7 @@ export async function callVgs(baseUrl, method, path, body) {
   const token = await getAccessToken();
   const url = `${baseUrl}${path}`;
   if (body) {
-    console.log(`→ ${method} ${url}\n  body: ${JSON.stringify(body)}`);
+    console.log(`→ ${method} ${url}\n  body: ${formatLogPayload(body)}`);
   } else {
     console.log(`→ ${method} ${url}`);
   }
@@ -78,7 +78,6 @@ export async function callVgs(baseUrl, method, path, body) {
     throw new Error(`${method} ${url} response read failed: ${err.message}`, { cause: err });
   }
 
-  console.log(`← ${res.status} ${text.substring(0, 500)}`);
   let data = null;
   if (text) {
     try {
@@ -87,9 +86,78 @@ export async function callVgs(baseUrl, method, path, body) {
       data = { raw: text };
     }
   }
+  console.log(`← ${res.status} ${formatLogPayload(data ?? text)}`);
   return { status: res.status, data };
 }
 
 export function hasCredentials() {
   return Boolean(VGS_CLIENT_ID && VGS_CLIENT_SECRET);
+}
+
+function formatLogPayload(value) {
+  const debugMode = process.env.AGENTIC_DEBUG_VGS_RESPONSE;
+  if (debugMode === "full") {
+    return JSON.stringify(redactSensitiveFields(value), null, 2);
+  }
+  if (debugMode === "unsafe-full" && isSandboxConfig()) {
+    return JSON.stringify(value, null, 2);
+  }
+  if (debugMode === "unsafe-full") {
+    return JSON.stringify({
+      warning: "AGENTIC_DEBUG_VGS_RESPONSE=unsafe-full is only allowed for sandbox VGS config.",
+      payload: redactSensitiveFields(value),
+    }, null, 2);
+  }
+
+  const cardSummary = summarizeCardPayload(value);
+  if (cardSummary) return JSON.stringify(cardSummary);
+
+  const serialized = typeof value === "string"
+    ? value
+    : JSON.stringify(redactSensitiveFields(value));
+  return serialized.substring(0, 500);
+}
+
+function summarizeCardPayload(value) {
+  if (!value || typeof value !== "object") return null;
+  const resource = value?.data?.data ?? value?.data ?? value;
+  if (!resource || resource.type !== "cards") return null;
+
+  const attrs = resource.attributes ?? {};
+  return {
+    data: {
+      id: resource.id ?? null,
+      type: resource.type,
+      attributes: {
+        last4: attrs.last4 ?? attrs.last_4 ?? attrs.last_four ?? null,
+        exp_month: attrs.exp_month ?? null,
+        exp_year: attrs.exp_year ?? null,
+        card_brand: attrs.card_brand ?? attrs.brand ?? attrs.cardBrand ?? null,
+        card_type: attrs.card_type ?? attrs.cardType ?? null,
+        bin: attrs.bin ?? null,
+        first8: attrs.first8 ?? null,
+      },
+    },
+  };
+}
+
+function redactSensitiveFields(value) {
+  if (Array.isArray(value)) return value.map(redactSensitiveFields);
+  if (!value || typeof value !== "object") return value;
+
+  const out = {};
+  for (const [key, nested] of Object.entries(value)) {
+    out[key] = isSensitiveKey(key) ? "[REDACTED]" : redactSensitiveFields(nested);
+  }
+  return out;
+}
+
+function isSensitiveKey(key) {
+  return /^(pan|cvc|cvv|number|card_number|security_code|cryptogram)$/i.test(key);
+}
+
+function isSandboxConfig() {
+  return VGS_VAULT_ENV === "sandbox"
+    && VGS_API_URL.includes("sandbox")
+    && VGS_CMP_API_URL.includes("sandbox");
 }

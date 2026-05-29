@@ -17,10 +17,12 @@ const BRAND_KEYS = [
 export async function enrichCardSurface(card, { force = false } = {}) {
   const surface = normalizeCardSurface(card);
   if (!surface.cardId || !hasCredentials() || (!force && !needsEnrichment(surface))) {
+    debugCardSurface("skip-enrich", surface, { hasCardId: Boolean(surface.cardId), hasCredentials: hasCredentials(), force });
     return surface;
   }
 
   const apiSurface = await fetchVgsCardSurface(surface.cardId);
+  debugCardSurface("vgs-enrich", surface, { apiSurface });
   if (!apiSurface) return surface;
 
   return {
@@ -54,12 +56,16 @@ export async function enrichMissingCardSurfaces(cards) {
 }
 
 function normalizeCardSurface(card) {
+  const bin = stringOrNull(card?.bin);
+  const first8 = stringOrNull(card?.first8);
   return {
     cardId: stringOrNull(card?.cardId ?? card?.id),
     lastFour: stringOrNull(card?.lastFour ?? card?.last4 ?? card?.last_4 ?? card?.last_four),
-    brand: stringOrNull(card?.brand ?? card?.card_brand ?? card?.cardBrand),
+    brand: stringOrNull(card?.brand ?? card?.card_brand ?? card?.cardBrand) ?? inferCardBrandFromBin(first8 ?? bin),
     expMonth: formatMonth(card?.expMonth ?? card?.exp_month ?? card?.expiration_month),
     expYear: formatYear(card?.expYear ?? card?.exp_year ?? card?.expiration_year),
+    bin,
+    first8,
   };
 }
 
@@ -84,15 +90,42 @@ async function fetchVgsCardSurface(cardId) {
 }
 
 function surfaceFromVgsCard(response) {
+  console.log('response---->' , response)
   const resource = response?.data?.data ?? response?.data ?? response;
   const attrs = resource?.attributes ?? {};
+  const bin = stringOrNull(attrs.bin);
+  const first8 = stringOrNull(attrs.first8);
   return {
     cardId: stringOrNull(resource?.id),
     lastFour: stringOrNull(attrs.last4 ?? attrs.last_4 ?? attrs.last_four ?? attrs.lastFour),
-    brand: findFirstStringByKey(attrs, BRAND_KEYS),
+    brand: findFirstStringByKey(attrs, BRAND_KEYS) ?? inferCardBrandFromBin(first8 ?? bin),
     expMonth: formatMonth(attrs.exp_month ?? attrs.expMonth ?? attrs.expiration_month),
     expYear: formatYear(attrs.exp_year ?? attrs.expYear ?? attrs.expiration_year),
   };
+}
+
+function inferCardBrandFromBin(value) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.startsWith("4")) return "VISA";
+  if (digits.length >= 2) {
+    const first2 = Number(digits.slice(0, 2));
+    if (first2 >= 51 && first2 <= 55) return "MASTERCARD";
+    if (first2 === 34 || first2 === 37) return "AMERICAN-EXPRESS";
+  }
+  if (digits.length >= 4) {
+    const first4 = Number(digits.slice(0, 4));
+    if (first4 >= 2221 && first4 <= 2720) return "MASTERCARD";
+    if (first4 === 6011) return "DISCOVER";
+  }
+  if (digits.length >= 3) {
+    const first3 = Number(digits.slice(0, 3));
+    if (first3 >= 644 && first3 <= 649) return "DISCOVER";
+  }
+  if (digits.startsWith("65")) return "DISCOVER";
+  if (digits.startsWith("35")) return "JCB";
+  if (digits.startsWith("62")) return "UNIONPAY";
+  return null;
 }
 
 function findFirstStringByKey(source, keys) {
@@ -117,4 +150,9 @@ function formatMonth(value) {
 function formatYear(value) {
   const str = stringOrNull(value);
   return str ? str.slice(-2) : null;
+}
+
+function debugCardSurface(stage, surface, extra = {}) {
+  if (process.env.AGENTIC_DEBUG_CARD_SURFACE !== "true") return;
+  console.log(`[card-surface:${stage}] ${JSON.stringify({ surface, ...extra })}`);
 }

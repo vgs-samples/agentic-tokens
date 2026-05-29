@@ -133,6 +133,7 @@ export function CollectPage() {
       setCardId(id);
 
       const surface = extractCardSurface(result, collectStateRef.current);
+      debugCardSurface("createCard", surface, result, collectStateRef.current);
 
       const payload = { cardId: id, buyerId, ...surface };
 
@@ -165,8 +166,12 @@ export function CollectPage() {
     brand: string | null;
     expMonth: string | null;
     expYear: string | null;
+    bin: string | null;
+    first8: string | null;
   } {
     const attrs = (result?.data?.data?.attributes ?? {}) as Record<string, unknown>;
+    const bin = stringOrNull(attrs.bin);
+    const first8 = stringOrNull(attrs.first8);
     const lastFour =
       (typeof attrs.last4 === "string" && attrs.last4) ||
       (typeof attrs.last_4 === "string" && attrs.last_4) ||
@@ -177,14 +182,14 @@ export function CollectPage() {
     const brand = findFirstStringByKey(
       [attrs, result?.data, collectState],
       CARD_BRAND_KEYS
-    );
+    ) ?? inferCardBrandFromBin(first8 ?? bin);
     const expMonthRaw =
       attrs.exp_month ?? attrs.expMonth ?? attrs.expiration_month ?? attrs.expirationMonth ?? null;
     const expYearRaw =
       attrs.exp_year ?? attrs.expYear ?? attrs.expiration_year ?? attrs.expirationYear ?? null;
     const expMonth = expMonthRaw != null ? String(expMonthRaw).padStart(2, "0").slice(-2) : null;
     const expYear = expYearRaw != null ? String(expYearRaw).slice(-2) : null;
-    return { lastFour: lastFour || null, brand: brand || null, expMonth, expYear };
+    return { lastFour: lastFour || null, brand: brand || null, expMonth, expYear, bin, first8 };
   }
 
   function findFirstStringByKey(sources: unknown[], keys: string[]): string | null {
@@ -204,6 +209,57 @@ export function CollectPage() {
       if (nested) return nested;
     }
     return null;
+  }
+
+  function inferCardBrandFromBin(value: unknown): string | null {
+    const digits = String(value ?? "").replace(/\D/g, "");
+    if (!digits) return null;
+    if (digits.startsWith("4")) return "VISA";
+    if (digits.length >= 2) {
+      const first2 = Number(digits.slice(0, 2));
+      if (first2 >= 51 && first2 <= 55) return "MASTERCARD";
+      if (first2 === 34 || first2 === 37) return "AMERICAN-EXPRESS";
+    }
+    if (digits.length >= 4) {
+      const first4 = Number(digits.slice(0, 4));
+      if (first4 >= 2221 && first4 <= 2720) return "MASTERCARD";
+      if (first4 === 6011) return "DISCOVER";
+    }
+    if (digits.length >= 3) {
+      const first3 = Number(digits.slice(0, 3));
+      if (first3 >= 644 && first3 <= 649) return "DISCOVER";
+    }
+    if (digits.startsWith("65")) return "DISCOVER";
+    if (digits.startsWith("35")) return "JCB";
+    if (digits.startsWith("62")) return "UNIONPAY";
+    return null;
+  }
+
+  function stringOrNull(value: unknown): string | null {
+    if (value === undefined || value === null) return null;
+    const str = String(value).trim();
+    return str || null;
+  }
+
+  function debugCardSurface(
+    stage: string,
+    surface: ReturnType<typeof extractCardSurface>,
+    result: VgsCollectCardResult,
+    collectState: VgsCollectForm["state"]
+  ) {
+    if (new URLSearchParams(window.location.search).get("debugCard") !== "1") return;
+    const attrs = (result?.data?.data?.attributes ?? {}) as Record<string, unknown>;
+    console.info("[card-debug]", stage, {
+      cardId: result?.data?.data?.id ?? null,
+      surface,
+      attrBrand: attrs.card_brand ?? attrs.brand ?? attrs.cardBrand ?? null,
+      attrLast4: attrs.last4 ?? attrs.last_4 ?? attrs.last_four ?? null,
+      attrExpMonth: attrs.exp_month ?? attrs.expMonth ?? null,
+      attrExpYear: attrs.exp_year ?? attrs.expYear ?? null,
+      attrBin: attrs.bin ?? null,
+      attrFirst8: attrs.first8 ?? null,
+      collectBrand: findFirstStringByKey([collectState], CARD_BRAND_KEYS),
+    });
   }
 
   const fieldsReady = readyForOption === option;
