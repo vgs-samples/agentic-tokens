@@ -631,6 +631,10 @@ async function handleAuthorizePayment(args, ctx) {
       intentId: pr.intentId ?? null,
       cryptogramId: pr.cryptogramId ?? null,
       paymentCredential: pr.paymentCredential ?? null,
+      confirmation: pr.confirmation ?? null,
+      confirmationId: pr.confirmationId ?? pr.confirmation?.id ?? null,
+      confirmationStatus: pr.confirmationStatus ?? pr.confirmation?.status ?? null,
+      confirmedAt: pr.confirmedAt ?? pr.confirmation?.confirmedAt ?? null,
       intentExpiresAt: pr.intentExpiresAt ?? null,
       amount: pr.amount ?? PAYMENT_AMOUNT,
       currency: pr.currency ?? PAYMENT_CURRENCY,
@@ -659,6 +663,9 @@ async function handleAuthorizePayment(args, ctx) {
   // straight back to the /cryptograms endpoint with the stored tokenId+intentId.
   if (previousStatus === "waiting_for_cryptogram" && flow.tokenId && flow.intentId) {
     return await attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr);
+  }
+  if (previousStatus === "waiting_for_confirmation" && flow.tokenId && flow.intentId && flow.cryptogramId) {
+    return await confirmPaymentAndFinalize(ctx, paymentRequestId, flow, pr);
   }
 
   const selectedCardId = flow.cardId ?? args.cardId ?? null;
@@ -862,10 +869,39 @@ async function attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr) {
     };
   }
 
+  flow.cryptogramId = cryptogramId;
+  flow.paymentCredential = maskedCredential;
+  flow.status = "waiting_for_confirmation";
+  await ctx.requestStore.set(paymentRequestId, flow);
+  return await confirmPaymentAndFinalize(ctx, paymentRequestId, flow, pr);
+}
+
+async function confirmPaymentAndFinalize(ctx, paymentRequestId, flow, pr) {
+  const cryptogramId = flow.cryptogramId;
+  const maskedCredential = flow.paymentCredential;
+  if (!cryptogramId || !maskedCredential) {
+    throw new Error(`Cannot confirm payment without cryptogram proof for paymentRequestId ${paymentRequestId}.`);
+  }
+
   const intentExpiresAt = flow.intentExpiresAt ?? (Date.now() + INTENT_DURATION_MS);
-  const completedAt = Date.now();
   const amount = pr.amount ?? PAYMENT_AMOUNT;
   const currency = pr.currency ?? PAYMENT_CURRENCY;
+
+  let confirmation = flow.confirmation ?? null;
+  if (!confirmation) {
+    const response = await confirmTransaction(ctx, flow.tokenId, flow.intentId, pr);
+    if (!response?.data?.id) throw new Error(`Confirmation returned no id: ${JSON.stringify(response)}`);
+    confirmation = confirmationSummaryFromResponse(response, {
+      status: "APPROVED",
+      type: "PURCHASE",
+      amount,
+      currency,
+    }, Date.now());
+    flow.confirmation = confirmation;
+    await ctx.requestStore.set(paymentRequestId, flow);
+  }
+
+  const completedAt = Date.now();
   const existingWallet = await getWalletState(ctx, flow.buyerId);
   const mandateUsed = flow.reusedWallet ? Number(existingWallet?.mandateUsed ?? 0) + 1 : 1;
   const paymentProof = {
@@ -880,6 +916,7 @@ async function attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr) {
     amount,
     currency,
     completedAt,
+    confirmation,
     reusedWallet: Boolean(flow.reusedWallet),
   };
   await saveWalletState(ctx, flow.buyerId, {
@@ -916,6 +953,10 @@ async function attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr) {
       mandateQuantity: MANDATE_QUANTITY,
       cryptogramId,
       paymentCredential: maskedCredential,
+      confirmation,
+      confirmationId: confirmation.id,
+      confirmationStatus: confirmation.status,
+      confirmedAt: confirmation.confirmedAt,
       reusedWallet: Boolean(flow.reusedWallet),
     },
   });
@@ -931,6 +972,10 @@ async function attemptCryptogramAndFinalize(ctx, paymentRequestId, flow, pr) {
     intentExpiresAt,
     cryptogramId,
     paymentCredential: maskedCredential,
+    confirmation,
+    confirmationId: confirmation.id,
+    confirmationStatus: confirmation.status,
+    confirmedAt: confirmation.confirmedAt,
     amount,
     currency,
     reusedWallet,
@@ -1224,6 +1269,10 @@ function paymentProofFromRecord(record) {
     intentExpiresAt: record.intentExpiresAt ?? null,
     cryptogramId: record.cryptogramId ?? record.paymentCredential?.cryptogramId ?? null,
     paymentCredential: record.paymentCredential ?? null,
+    confirmation: record.confirmation ?? null,
+    confirmationId: record.confirmationId ?? record.confirmation?.id ?? null,
+    confirmationStatus: record.confirmationStatus ?? record.confirmation?.status ?? null,
+    confirmedAt: record.confirmedAt ?? record.confirmation?.confirmedAt ?? null,
     amount: record.amount ?? PAYMENT_AMOUNT,
     currency: record.currency ?? PAYMENT_CURRENCY,
     completedAt: record.completedAt ?? null,
@@ -1388,6 +1437,45 @@ async function getCryptogram(ctx, tokenId, intentId, paymentRequest) {
     log(`cryptogram response shape: ${describeKeyShape(response).slice(0, 60).join(", ")}`);
   }
   return response;
+}
+
+async function confirmTransaction(ctx, tokenId, intentId, paymentRequest) {
+  const amount = paymentRequest.amount ?? PAYMENT_AMOUNT;
+  const currency = paymentRequest.currency ?? PAYMENT_CURRENCY;
+  return apiFetch(ctx, `/confirmations?tokenId=${encodeURIComponent(tokenId)}&intentId=${encodeURIComponent(intentId)}`, {
+    method: "POST",
+    body: {
+      data: {
+        type: "confirmations",
+        attributes: {
+          confirmation_data: [{
+            payment_confirmation_data: {
+              transaction_status: "APPROVED",
+              transaction_timestamp: String(Math.floor(Date.now() / 1000)),
+              transaction_type: "PURCHASE",
+              transaction_amount: {
+                transaction_amount: formatAmount(amount),
+                transaction_currency_code: currency,
+              },
+            },
+          }],
+        },
+      },
+    },
+  });
+}
+
+function confirmationSummaryFromResponse(response, requested, confirmedAt) {
+  const attrs = response?.data?.attributes ?? {};
+  return {
+    id: response?.data?.id ?? null,
+    type: response?.data?.type ?? null,
+    status: attrs.status ?? attrs.transaction_status ?? requested.status,
+    transactionType: attrs.transaction_type ?? requested.type,
+    amount: requested.amount,
+    currency: requested.currency,
+    confirmedAt: new Date(confirmedAt).toISOString(),
+  };
 }
 
 async function waitForSession(ctx, sessionId, timeoutMs) {
@@ -1775,6 +1863,9 @@ function formatAuthorizePayment(result) {
     if (cred.cryptogramPreview) lines.push(`| Cryptogram value | \`${cred.cryptogramPreview}\` _(masked)_ |`);
     if (cred.type) lines.push(`| Cryptogram type | ${cred.type} |`);
     if (cred.cryptogramExpiresAt) lines.push(`| Cryptogram valid until | ${cred.cryptogramExpiresAt} _(this one-time credential)_ |`);
+    if (result.confirmationStatus) lines.push(`| Confirmation | ${result.confirmationStatus} |`);
+    if (result.confirmationId) lines.push(`| Confirmation response | \`${result.confirmationId}\` |`);
+    if (result.confirmedAt) lines.push(`| Confirmed at | ${result.confirmedAt} |`);
     if (result.intentExpiresAt) {
       const dateStr = new Date(result.intentExpiresAt).toISOString().slice(0, 10);
       lines.push(`| Intent valid until | **${dateStr}** ${result.reusedWallet ? "(reused — no TouchID this time)" : "(fresh — created by this TouchID)"} |`);
@@ -1873,6 +1964,9 @@ function formatPaymentProof(result) {
   if (cred.dpanMasked) lines.push(`| DPAN | \`${cred.dpanMasked}\` |`);
   if (cred.expiry) lines.push(`| DPAN expiry | ${cred.expiry} |`);
   if (cred.cryptogramExpiresAt) lines.push(`| Cryptogram valid until | ${cred.cryptogramExpiresAt} |`);
+  if (p.confirmationStatus ?? p.confirmation?.status) lines.push(`| Confirmation | ${p.confirmationStatus ?? p.confirmation.status} |`);
+  if (p.confirmationId ?? p.confirmation?.id) lines.push(`| Confirmation response | \`${p.confirmationId ?? p.confirmation.id}\` |`);
+  if (p.confirmedAt ?? p.confirmation?.confirmedAt) lines.push(`| Confirmed at | ${p.confirmedAt ?? p.confirmation.confirmedAt} |`);
   if (p.intentExpiresAt) lines.push(`| Intent valid until | ${new Date(p.intentExpiresAt).toISOString().slice(0, 10)} |`);
   if (p.completedAt) lines.push(`| Captured at | ${new Date(p.completedAt).toISOString()} |`);
   return lines.join("\n");

@@ -29,6 +29,7 @@ Open https://localhost:4200 (accept the self-signed certificate warning).
 3. **Device Binding** — FIDO/OTP authentication via VgsAgenticAuth SDK
 4. **Create Intent** — creates a spending authorization with mandates
 5. **Get Cryptogram** — retrieves DPAN + cryptogram for payment
+6. **Confirm Transaction** — reports the payment outcome back to the intent
 
 Each step auto-populates IDs into the next step.
 

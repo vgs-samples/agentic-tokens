@@ -127,6 +127,37 @@ const backend = createServer(async (req, res) => {
     return send(200, { data: { id: "tok_smoke", type: "agentic_tokens" } });
   }
 
+  if (url.pathname === "/api/intents" && req.method === "POST") {
+    return send(200, { data: { id: "int_smoke", type: "intents", attributes: { status: "active" } } });
+  }
+
+  if (url.pathname === "/api/cryptograms" && req.method === "POST") {
+    return send(200, {
+      data: {
+        id: "int_smoke",
+        type: "cryptograms",
+        attributes: {
+          intent_id: "int_smoke",
+          status: "active",
+          network_token: "4111111111114242",
+          exp_month: 12,
+          exp_year: 27,
+          last4: "4242",
+          cryptogram: {
+            id: "cg_smoke",
+            value: "333",
+            type: "DAVV",
+            expires_at: "2026-06-01T00:00:00Z",
+          },
+        },
+      },
+    });
+  }
+
+  if (url.pathname === "/api/confirmations" && req.method === "POST") {
+    return send(200, { data: { id: url.searchParams.get("intentId") ?? "int_smoke", type: "confirmations", attributes: { status: "APPROVED" } } });
+  }
+
   send(404, { error: `mock backend has no route for ${req.method} ${url.pathname}` });
 });
 
@@ -263,28 +294,34 @@ if (paymentRequestId) {
   });
   await waitFor(() => messages.find((m) => m.id === 6), 4000);
 
-  const pr = paymentRequests.get(paymentRequestId);
-  paymentRequests.set(paymentRequestId, {
-    ...pr,
-    status: "completed",
-    cryptogramId: "cg_smoke",
-    paymentCredential: { dpanLast4: "4242" },
-    stalePendingReads: 1,
-  });
+  const authWaitingResult = messages.find((m) => m.id === 6);
+  const bindingSessionId = authWaitingResult?.result?.structuredContent?.binding?.sessionId;
+  if (bindingSessionId) {
+    sessions.set(bindingSessionId, { assuranceData: [{ method: "passkey", status: "verified" }] });
+  }
+
   send({
     jsonrpc: "2.0", id: 7, method: "tools/call",
-    params: { name: "publish_site", arguments: { params: sampleParams, paymentRequestId } },
+    params: { name: "authorize_payment", arguments: { paymentRequestId, cardId: "CRD_smoke" } },
   });
   await waitFor(() => messages.find((m) => m.id === 7), 4000);
+
+  const pr = paymentRequests.get(paymentRequestId);
+  paymentRequests.set(paymentRequestId, { ...pr, stalePendingReads: 1 });
+  send({
+    jsonrpc: "2.0", id: 8, method: "tools/call",
+    params: { name: "publish_site", arguments: { params: sampleParams, paymentRequestId } },
+  });
+  await waitFor(() => messages.find((m) => m.id === 8), 4000);
 }
 
 send({
-  jsonrpc: "2.0", id: 8, method: "tools/call",
+  jsonrpc: "2.0", id: 9, method: "tools/call",
   params: { name: "add_buyer_card", arguments: {} },
 });
-await waitFor(() => messages.find((m) => m.id === 8), 4000);
+await waitFor(() => messages.find((m) => m.id === 9), 4000);
 
-const addCardWaitingResult = messages.find((m) => m.id === 8);
+const addCardWaitingResult = messages.find((m) => m.id === 9);
 const addCardRequestId = addCardWaitingResult?.result?.structuredContent?.cardRequestId;
 const addCardSessionId = addCardWaitingResult?.result?.structuredContent?.collect?.sessionId;
 if (addCardRequestId && addCardSessionId) {
@@ -297,10 +334,10 @@ if (addCardRequestId && addCardSessionId) {
     expYear: "28",
   });
   send({
-    jsonrpc: "2.0", id: 9, method: "tools/call",
+    jsonrpc: "2.0", id: 10, method: "tools/call",
     params: { name: "add_buyer_card", arguments: { cardRequestId: addCardRequestId } },
   });
-  await waitFor(() => messages.find((m) => m.id === 9), 4000);
+  await waitFor(() => messages.find((m) => m.id === 10), 4000);
 }
 
 subscriptions.set("demo-buyer", {
@@ -342,16 +379,16 @@ subscriptions.set("demo-buyer", {
 });
 
 send({
-  jsonrpc: "2.0", id: 10, method: "tools/call",
+  jsonrpc: "2.0", id: 11, method: "tools/call",
   params: { name: "authorization_status", arguments: {} },
 });
-await waitFor(() => messages.find((m) => m.id === 10), 4000);
+await waitFor(() => messages.find((m) => m.id === 11), 4000);
 
 send({
-  jsonrpc: "2.0", id: 11, method: "tools/call",
+  jsonrpc: "2.0", id: 12, method: "tools/call",
   params: { name: "payment_proof", arguments: {} },
 });
-await waitFor(() => messages.find((m) => m.id === 11), 4000);
+await waitFor(() => messages.find((m) => m.id === 12), 4000);
 
 child.kill();
 backend.close();
@@ -361,11 +398,12 @@ const renderResult = messages.find((m) => m.id === 3);
 const publishResult = messages.find((m) => m.id === 4);
 const transientAuthResult = messages.find((m) => m.id === 5);
 const resumedAuthResult = messages.find((m) => m.id === 6);
-const paidPublishResult = messages.find((m) => m.id === 7);
-const addCardWaitingResultFinal = messages.find((m) => m.id === 8);
-const addCardCompletedResult = messages.find((m) => m.id === 9);
-const authorizationStatusResult = messages.find((m) => m.id === 10);
-const paymentProofResult = messages.find((m) => m.id === 11);
+const completedAuthResult = messages.find((m) => m.id === 7);
+const paidPublishResult = messages.find((m) => m.id === 8);
+const addCardWaitingResultFinal = messages.find((m) => m.id === 9);
+const addCardCompletedResult = messages.find((m) => m.id === 10);
+const authorizationStatusResult = messages.find((m) => m.id === 11);
+const paymentProofResult = messages.find((m) => m.id === 12);
 
 const expectedTools = [
   "create_marketing_site", "render_marketing_site", "publish_site", "authorize_payment",
@@ -387,6 +425,8 @@ if (
   || transientAuthResult?.result?.structuredContent?.status !== "pending"
   || transientAuthResult?.result?.isError !== false
   || resumedAuthResult?.result?.structuredContent?.status !== "waiting_for_authentication"
+  || completedAuthResult?.result?.structuredContent?.status !== "completed"
+  || completedAuthResult?.result?.structuredContent?.confirmationStatus !== "APPROVED"
   || paidPublishResult?.result?.structuredContent?.status !== "published"
   || !paidPublishResult?.result?.structuredContent?.url
   || addCardWaitingResultFinal?.result?.structuredContent?.status !== "waiting_for_card"
