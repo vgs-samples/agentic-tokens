@@ -95,7 +95,7 @@ export function hasCredentials() {
 }
 
 function formatLogPayload(value) {
-  const debugMode = process.env.AGENTIC_DEBUG_VGS_RESPONSE;
+  const debugMode = process.env.AGENTIC_DEBUG_VGS_RESPONSE ?? "full";
   if (debugMode === "full") {
     return JSON.stringify(redactSensitiveFields(value), null, 2);
   }
