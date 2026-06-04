@@ -113,6 +113,16 @@ export function DeviceBinding({ consumerEmail }: Props) {
     }
   }
 
+  function handleSkip() {
+    log("Step 3: Skipped — passkey-exempt tenant; backend synthesizes the assurance waiver");
+    const session = sessionRef.current as { destroy?: () => void } | null;
+    if (session?.destroy) session.destroy();
+    sessionRef.current = null;
+    setState((s) => ({ ...s, assuranceData: null }));
+    setResponse({ skipped: true, note: "Device binding bypassed (passkey-exempt)" });
+    completeStep(3);
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async function handleAuthenticate(sessionArg?: any) {
     setLoading(3, true);
@@ -166,7 +176,14 @@ export function DeviceBinding({ consumerEmail }: Props) {
       <Field label="Merchant Name (optional)">
         <input className="input" placeholder="e.g. Best Buy" value={merchantName} onChange={(e) => setMerchantName(e.target.value)} />
       </Field>
-      <Button onClick={handleStartSession} disabled={sessionStarted || loading}>Start Session</Button>
+      <div className="flex gap-2">
+        <Button onClick={handleStartSession} disabled={sessionStarted || loading}>Start Session</Button>
+        <Button onClick={handleSkip} disabled={loading} variant="secondary">Skip — passkey-exempt only</Button>
+      </div>
+      <p className="text-xs text-gray-500 mt-1">
+        Skip only if your tenant is configured with <code>visa_fido_mode: passkey_exempt</code> on the backend.
+        Otherwise device binding is required and the intent will be rejected.
+      </p>
 
       {otpVisible && (
         <>
