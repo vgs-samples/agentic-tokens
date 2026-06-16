@@ -14,7 +14,11 @@ export function CreateIntent() {
   const [amount, setAmount] = useState("5.33");
   const [currency, setCurrency] = useState("USD");
   const [quantity, setQuantity] = useState("1");
-  const [effectiveUntil, setEffectiveUntil] = useState("2026-06-15T00:00:00Z");
+  const [effectiveUntil, setEffectiveUntil] = useState(() => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + 10);
+    return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+  });
   const [response, setResponse] = useState<unknown>(null);
 
   async function handleCreate() {
