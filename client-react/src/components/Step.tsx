@@ -1,24 +1,28 @@
 import { type ReactNode, useState } from "react";
-import { useAppState, useStepStatus } from "../useAppState";
+import { useAppState, useStepStatus, type StepKey } from "../useAppState";
 
 interface StepProps {
-  num: number;
+  stepKey: StepKey;
   title: string;
   children: ReactNode;
   response?: unknown;
 }
 
-export function Step({ num, title, children, response }: StepProps) {
+export function Step({ stepKey, title, children, response }: StepProps) {
   const { goToStep } = useAppState();
-  const { active, done, loading, disabled } = useStepStatus(num);
+  const { active, done, loading, disabled, num, inFlow } = useStepStatus(stepKey);
   const [collapsed, setCollapsed] = useState(false);
   const open = active && !collapsed;
+
+  // Steps that aren't part of the active flow (e.g. device binding on a
+  // Mastercard card) don't render at all.
+  if (!inFlow) return null;
 
   function handleHeaderClick() {
     if (active) {
       setCollapsed((c) => !c);
     } else {
-      goToStep(num);
+      goToStep(stepKey);
     }
   }
 

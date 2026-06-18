@@ -6,7 +6,7 @@ import { Field, Row, Button } from "./ui";
 
 export function ConfirmTransaction() {
   const { state, log, setLoading, completeStep } = useAppState();
-  const { loading } = useStepStatus(6);
+  const { loading, num } = useStepStatus("confirm");
   const [txnStatus, setTxnStatus] = useState("APPROVED");
   const [txnType, setTxnType] = useState("PURCHASE");
   const [txnAmount, setTxnAmount] = useState("5.33");
@@ -14,8 +14,8 @@ export function ConfirmTransaction() {
   const [response, setResponse] = useState<unknown>(null);
 
   async function handleConfirm() {
-    setLoading(6, true);
-    log("Step 6: Sending transaction confirmation...");
+    setLoading("confirm", true);
+    log(`Step ${num}: Sending transaction confirmation...`);
     try {
       const data = await api(
         "POST",
@@ -41,20 +41,20 @@ export function ConfirmTransaction() {
       );
       setResponse(data);
       if (data?.data?.id) {
-        log(`Step 6: Confirmation sent — intent ${data.data.id}`);
-        completeStep(6);
+        log(`Step ${num}: Confirmation sent — intent ${data.data.id}`);
+        completeStep("confirm");
       } else {
-        log("Step 6: Failed — " + JSON.stringify(data));
-        setLoading(6, false);
+        log(`Step ${num}: Failed — ` + JSON.stringify(data));
+        setLoading("confirm", false);
       }
     } catch (err) {
-      log("Step 6: Error — " + (err as Error).message);
-      setLoading(6, false);
+      log(`Step ${num}: Error — ` + (err as Error).message);
+      setLoading("confirm", false);
     }
   }
 
   return (
-    <Step num={6} title="Confirm Transaction" response={response}>
+    <Step stepKey="confirm" title="Confirm Transaction" response={response}>
       <Field label="Intent ID">
         <input className="input" readOnly value={state.intentId ?? ""} />
       </Field>

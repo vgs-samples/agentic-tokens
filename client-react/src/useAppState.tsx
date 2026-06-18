@@ -9,18 +9,23 @@ import {
   type RefObject,
   type SetStateAction,
 } from "react";
+import { DEFAULT_NETWORK, FLOWS, type Network, type StepKey } from "./flow";
+
+export type { Network, StepKey } from "./flow";
 
 export interface AppState {
   cardId: string | null;
   tokenId: string | null;
   intentId: string | null;
   assuranceData: unknown[] | null;
-  /** Which step (1-6) is currently active */
-  activeStep: number;
+  /** Resolved card network — drives which steps are shown. Defaults to visa. */
+  network: Network;
+  /** Which step is currently active */
+  activeStep: StepKey;
   /** Steps that have been completed */
-  completedSteps: Set<number>;
+  completedSteps: Set<StepKey>;
   /** Steps currently loading */
-  loadingSteps: Set<number>;
+  loadingSteps: Set<StepKey>;
 }
 
 function initialState(): AppState {
@@ -29,7 +34,8 @@ function initialState(): AppState {
     tokenId: null,
     intentId: null,
     assuranceData: null,
-    activeStep: 1,
+    network: DEFAULT_NETWORK,
+    activeStep: "card",
     completedSteps: new Set(),
     loadingSteps: new Set(),
   };
@@ -42,9 +48,9 @@ interface AppStateContextValue {
   setState: Dispatch<SetStateAction<AppState>>;
   logs: string[];
   log: LogFn;
-  setLoading: (step: number, on: boolean) => void;
-  completeStep: (step: number) => void;
-  goToStep: (step: number) => void;
+  setLoading: (step: StepKey, on: boolean) => void;
+  completeStep: (step: StepKey) => void;
+  goToStep: (step: StepKey) => void;
   reset: () => void;
   sessionRef: RefObject<unknown>;
 }
@@ -61,7 +67,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setLogs((prev) => [...prev, `[${ts}] ${msg}`]);
   }, []);
 
-  const setLoading = useCallback((step: number, on: boolean) => {
+  const setLoading = useCallback((step: StepKey, on: boolean) => {
     setState((s) => {
       const next = new Set(s.loadingSteps);
       if (on) next.add(step);
@@ -70,22 +76,26 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const completeStep = useCallback((step: number) => {
+  const completeStep = useCallback((step: StepKey) => {
     setState((s) => {
       const completed = new Set(s.completedSteps);
       completed.add(step);
       const loading = new Set(s.loadingSteps);
       loading.delete(step);
+      const flow = FLOWS[s.network];
+      const idx = flow.indexOf(step);
+      // Advance to the next step in the active flow; stay put on the last step.
+      const next = idx >= 0 && idx + 1 < flow.length ? flow[idx + 1] : step;
       return {
         ...s,
         completedSteps: completed,
         loadingSteps: loading,
-        activeStep: step + 1,
+        activeStep: next,
       };
     });
   }, []);
 
-  const goToStep = useCallback((step: number) => {
+  const goToStep = useCallback((step: StepKey) => {
     setState((s) => (s.activeStep === step ? s : { ...s, activeStep: step }));
   }, []);
 
@@ -115,11 +125,18 @@ export function useAppState(): AppStateContextValue {
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
-export function useStepStatus(step: number) {
+export function useStepStatus(step: StepKey) {
   const { state } = useAppState();
+  const flow = FLOWS[state.network];
+  const stepIdx = flow.indexOf(step);
+  const activeIdx = flow.indexOf(state.activeStep);
   const done = state.completedSteps.has(step);
   const loading = state.loadingSteps.has(step);
   const active = state.activeStep === step;
-  const disabled = !done && state.activeStep < step;
-  return { active, done, loading, disabled };
+  // A step is disabled if it isn't part of the active flow, or it's still ahead
+  // of the active step (and not already completed).
+  const disabled = !done && (stepIdx === -1 || activeIdx < stepIdx);
+  // 1-based display number within the active flow (0 if not part of it).
+  const num = stepIdx === -1 ? 0 : stepIdx + 1;
+  return { active, done, loading, disabled, num, inFlow: stepIdx !== -1 };
 }

@@ -12,7 +12,7 @@ interface Props {
 
 export function DeviceBinding({ consumerEmail }: Props) {
   const { state, setState, log, setLoading, completeStep, sessionRef } = useAppState();
-  const { loading } = useStepStatus(3);
+  const { loading, num } = useStepStatus("deviceBinding");
   const [response, setResponse] = useState<unknown>(null);
   const [environment, setEnvironment] = useState(import.meta.env.VITE_DEFAULT_ENVIRONMENT || "sandbox");
   const [authAmount, setAuthAmount] = useState("100");
@@ -28,13 +28,13 @@ export function DeviceBinding({ consumerEmail }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   async function handleStartSession() {
-    setLoading(3, true);
+    setLoading("deviceBinding", true);
     setSessionStarted(true);
-    log("Step 3: Starting device binding session...");
+    log(`Step ${num}: Starting device binding session...`);
     try {
       const accessToken = await fetchAccessToken();
       const clientRefId = crypto.randomUUID();
-      log(`Step 3: clientRefId=${clientRefId}`);
+      log(`Step ${num}: clientRefId=${clientRefId}`);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { VgsAgenticAuth }: any = await import("../vgs-agentic-auth.js");
@@ -52,81 +52,81 @@ export function DeviceBinding({ consumerEmail }: Props) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const session: any = await flow.startSession(containerRef.current);
       sessionRef.current = session;
-      log("Step 3: Session created. needsOtp=" + session.needsOtp);
+      log(`Step ${num}: Session created. needsOtp=` + session.needsOtp);
 
       if (session.needsOtp) {
         setOtpMethods(session.otpMethods);
         setSelectedMethodId(session.otpMethods[0]?.identifier ?? "");
         setOtpDelivered(false);
         setOtpVisible(true);
-        setLoading(3, false);
+        setLoading("deviceBinding", false);
       } else {
         await handleAuthenticate(session);
       }
     } catch (err: unknown) {
       const e = err as { message: string; code?: string; status?: number };
-      log("Step 3: Session error — " + e.message);
+      log(`Step ${num}: Session error — ` + e.message);
       setResponse({ error: e.message, code: e.code, status: e.status });
       setSessionStarted(false);
-      setLoading(3, false);
+      setLoading("deviceBinding", false);
     }
   }
 
   async function handleRequestOtp() {
     const method = otpMethods.find((m) => m.identifier === selectedMethodId);
     if (!method) {
-      log("Step 3: Pick an OTP method first");
+      log(`Step ${num}: Pick an OTP method first`);
       return;
     }
-    setLoading(3, true);
-    log(`Step 3: Requesting OTP via ${method.method}...`);
+    setLoading("deviceBinding", true);
+    log(`Step ${num}: Requesting OTP via ${method.method}...`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const session = sessionRef.current as any;
     try {
       await session.requestOtp(method);
       setOtpDelivered(true);
-      log("Step 3: OTP delivery requested");
-      setLoading(3, false);
+      log(`Step ${num}: OTP delivery requested`);
+      setLoading("deviceBinding", false);
     } catch (err: unknown) {
       const e = err as { message: string; code?: string };
-      log("Step 3: requestOtp error — " + e.message);
+      log(`Step ${num}: requestOtp error — ` + e.message);
       setResponse({ error: e.message, code: e.code });
-      setLoading(3, false);
+      setLoading("deviceBinding", false);
     }
   }
 
   async function handleSubmitOtp() {
-    setLoading(3, true);
-    log("Step 3: Submitting OTP...");
+    setLoading("deviceBinding", true);
+    log(`Step ${num}: Submitting OTP...`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const session = sessionRef.current as any;
     try {
       await session.submitOtp(otp.trim());
       setOtpVisible(false);
-      log("Step 3: OTP accepted");
+      log(`Step ${num}: OTP accepted`);
       await handleAuthenticate(session);
     } catch (err: unknown) {
       const e = err as { message: string; code?: string };
-      log("Step 3: OTP error — " + e.message);
+      log(`Step ${num}: OTP error — ` + e.message);
       setResponse({ error: e.message, code: e.code });
-      setLoading(3, false);
+      setLoading("deviceBinding", false);
     }
   }
 
   function handleSkip() {
-    log("Step 3: Skipped — passkey-exempt tenant; backend synthesizes the assurance waiver");
+    log(`Step ${num}: Skipped — passkey-exempt tenant; backend synthesizes the assurance waiver`);
     const session = sessionRef.current as { destroy?: () => void } | null;
     if (session?.destroy) session.destroy();
     sessionRef.current = null;
     setState((s) => ({ ...s, assuranceData: null }));
     setResponse({ skipped: true, note: "Device binding bypassed (passkey-exempt)" });
-    completeStep(3);
+    completeStep("deviceBinding");
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async function handleAuthenticate(sessionArg?: any) {
-    setLoading(3, true);
-    log("Step 3: Running FIDO ceremony...");
+    setLoading("deviceBinding", true);
+    log(`Step ${num}: Running FIDO ceremony...`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const session = sessionArg ?? (sessionRef.current as any);
     try {
@@ -135,18 +135,18 @@ export function DeviceBinding({ consumerEmail }: Props) {
       sessionRef.current = null;
       setState((s) => ({ ...s, assuranceData }));
       setResponse({ assuranceData });
-      log("Step 3: Device binding complete");
-      completeStep(3);
+      log(`Step ${num}: Device binding complete`);
+      completeStep("deviceBinding");
     } catch (err: unknown) {
       const e = err as { message: string; code?: string };
-      log("Step 3: FIDO error — " + e.message);
+      log(`Step ${num}: FIDO error — ` + e.message);
       setResponse({ error: e.message, code: e.code });
-      setLoading(3, false);
+      setLoading("deviceBinding", false);
     }
   }
 
   return (
-    <Step num={3} title="Device Binding (FIDO / OTP)" response={response}>
+    <Step stepKey="deviceBinding" title="Device Binding (FIDO / OTP)" response={response}>
       <Field label="Token ID">
         <input className="input" value={state.tokenId ?? ""} onChange={(e) => setState((s) => ({ ...s, tokenId: e.target.value }))} />
       </Field>

@@ -38,6 +38,9 @@ function AppContent() {
       </div>
       <p className="text-gray-500 text-sm mb-6">Step-by-step integration reference for the VGS Agentic Tokens API</p>
 
+      {/* Every step routes through <Step>, which renders nothing when the step
+          isn't part of the active network's flow — so flow gating lives there,
+          in one place, rather than being repeated per step here. */}
       <CreateCard />
       <EnrollToken consumerEmail={consumerEmail} setConsumerEmail={setConsumerEmail} />
       <DeviceBinding consumerEmail={consumerEmail} />

@@ -90,13 +90,16 @@ app.delete("/api/intents", handler(async (req, res) => {
 }));
 
 // POST /api/cryptograms — get payment cryptogram (Agentic API)
+// Two network-specific endpoints behind one route:
+//   Visa       — intent-scoped: /agentic-tokens/{tokenId}/intents/{intentId}/cryptograms
+//   Mastercard — card-scoped SCOF checkout (no intent): /cards/{cardId}/agentic-tokens/{tokenId}/cryptograms
+// The caller selects by passing intentId (Visa) or cardId (Mastercard).
 app.post("/api/cryptograms", handler(async (req, res) => {
-  const { tokenId, intentId } = req.query;
-  const { status, data } = await callVgs(
-    vgsConfig.apiUrl, "POST",
-    `/agentic-tokens/${tokenId}/intents/${intentId}/cryptograms`,
-    req.body
-  );
+  const { tokenId, intentId, cardId } = req.query;
+  const path = cardId
+    ? `/cards/${cardId}/agentic-tokens/${tokenId}/cryptograms`
+    : `/agentic-tokens/${tokenId}/intents/${intentId}/cryptograms`;
+  const { status, data } = await callVgs(vgsConfig.apiUrl, "POST", path, req.body);
   res.status(status).json(data);
 }));
 

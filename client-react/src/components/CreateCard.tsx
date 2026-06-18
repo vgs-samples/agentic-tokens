@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchAccessToken, fetchConfig } from "../api";
 import { useAppState, useStepStatus } from "../useAppState";
+import { DEFAULT_NETWORK, NETWORK_META, networkFromCardType, type Network } from "../flow";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
@@ -11,7 +12,7 @@ const FIELD_CSS = {
   "&::placeholder": { color: "#9ca3af" },
 };
 
-type CardOption = "card1" | "card2" | "custom";
+type CardOption = "visa1" | "visa2" | "mastercard" | "custom";
 
 interface TestCard {
   id: CardOption;
@@ -19,19 +20,24 @@ interface TestCard {
   pan: string;
   cvv: string;
   exp: string;
+  network: Network;
 }
 
 const TEST_CARDS: TestCard[] = [
-  { id: "card1", label: "Card 1 — ...1569 / CVV 814 / 12/27", pan: "4622943123121569", cvv: "814", exp: "12 / 27" },
-  { id: "card2", label: "Card 2 — ...1478 / CVV 845 / 12/27", pan: "4622943123121478", cvv: "845", exp: "12 / 27" },
+  { id: "visa1", label: "Visa — ...1569 / CVV 814 / 12/27", pan: "4622943123121569", cvv: "814", exp: "12 / 27", network: "visa" },
+  { id: "visa2", label: "Visa — ...1478 / CVV 845 / 12/27", pan: "4622943123121478", cvv: "845", exp: "12 / 27", network: "visa" },
+  { id: "mastercard", label: "Mastercard — ...4574 / CVV 123 / 12/27", pan: "2222690420064574", cvv: "123", exp: "12 / 27", network: "mastercard" },
 ];
 
 export function CreateCard() {
-  const { setState, log, setLoading, completeStep } = useAppState();
-  const { loading } = useStepStatus(1);
+  const { state, setState, log, setLoading, completeStep } = useAppState();
+  const { loading, num } = useStepStatus("card");
   const [response, setResponse] = useState<unknown>(null);
-  const [option, setOption] = useState<CardOption>("card1");
+  const [option, setOption] = useState<CardOption>("visa1");
   const [formInitialized, setFormInitialized] = useState(false);
+  // Latest card type reported by Collect.js — used to detect the network for
+  // custom PANs entered in the secure iframe (preset cards use their known PAN).
+  const cardTypeRef = useRef<string | null>(null);
   // Derived "ready" state — set after fields for the current option finish loading.
   // Comparing against the live `option` keeps the button disabled while remounting,
   // without a synchronous setState in the effect body.
@@ -66,7 +72,15 @@ export function CreateCard() {
         const form = await window.VGSCollect.session({
           vaultId: cfg.vaultId,
           env: cfg.vaultEnv,
-          stateCallback: () => {},
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          stateCallback: (formState: any) => {
+            // Capture the card brand Collect detects from the typed PAN so we
+            // can resolve the network even when the PAN lives in the iframe.
+            for (const key in formState) {
+              const ct = formState[key]?.cardType;
+              if (ct && ct !== "unknown") cardTypeRef.current = ct;
+            }
+          },
           authHandler: async () => await fetchAccessToken(),
         });
         if (cancelled) {
@@ -140,35 +154,54 @@ export function CreateCard() {
     };
   }, [formInitialized, option]);
 
+  // Resolve the network from the selected preset, or — for a custom card — from
+  // the brand Collect detected. Falls back to the default when undetectable; the
+  // enroll response is the authoritative confirmation (see EnrollToken).
+  function resolveNetwork(): Network {
+    const preset = TEST_CARDS.find((c) => c.id === option);
+    if (preset) return preset.network;
+    return networkFromCardType(cardTypeRef.current) ?? DEFAULT_NETWORK;
+  }
+
   async function handleCreate() {
     const form = formRef.current;
     if (!form) return;
-    setLoading(1, true);
-    log("Step 1: Creating card via Collect.js…");
+    setLoading("card", true);
+    log(`Step ${num}: Creating card via Collect.js…`);
     try {
       const result = await form.createCard();
       setResponse(result);
       const cardId = result?.data?.data?.id;
       if (cardId) {
-        setState((s) => ({ ...s, cardId }));
-        log(`Step 1: Card created — ${cardId}`);
-        completeStep(1);
+        const network = resolveNetwork();
+        setState((s) => ({ ...s, cardId, network }));
+        log(`Step ${num}: Card created — ${cardId} (${network})`);
+        completeStep("card");
       } else {
-        log("Step 1: Failed — " + JSON.stringify(result));
-        setLoading(1, false);
+        log(`Step ${num}: Failed — ` + JSON.stringify(result));
+        setLoading("card", false);
       }
     } catch (err) {
-      log("Step 1: Error — " + (err as Error).message);
+      log(`Step ${num}: Error — ` + (err as Error).message);
       setResponse({ error: (err as Error).message });
-      setLoading(1, false);
+      setLoading("card", false);
     }
   }
 
   return (
-    <Step num={1} title="Create Card (VGS Collect)" response={response}>
+    <Step stepKey="card" title="Create Card (VGS Collect)" response={response}>
       {initError && (
         <div className="bg-red-50 border border-red-300 text-red-700 text-sm rounded p-2 mb-2">
           {initError}
+        </div>
+      )}
+
+      {state.cardId && (
+        <div className="text-sm mb-1">
+          Detected network:{" "}
+          <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${NETWORK_META[state.network].badgeCss}`}>
+            {NETWORK_META[state.network].label}
+          </span>
         </div>
       )}
 

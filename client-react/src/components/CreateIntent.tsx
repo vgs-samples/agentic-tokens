@@ -6,7 +6,7 @@ import { Field, Row, Button } from "./ui";
 
 export function CreateIntent() {
   const { state, setState, log, setLoading, completeStep } = useAppState();
-  const { loading } = useStepStatus(4);
+  const { loading, num } = useStepStatus("intent");
   const [consumerPrompt, setConsumerPrompt] = useState("Allow monthly purchase up to $5.33 at Best Buy");
   const [mandateDesc, setMandateDesc] = useState("Monthly subscription");
   const [merchantName, setMerchantName] = useState("Best Buy");
@@ -22,8 +22,8 @@ export function CreateIntent() {
   const [response, setResponse] = useState<unknown>(null);
 
   async function handleCreate() {
-    setLoading(4, true);
-    log("Step 4: Creating intent...");
+    setLoading("intent", true);
+    log(`Step ${num}: Creating intent...`);
     try {
       const assuranceData = state.assuranceData;
       const data = await api("POST", `/intents?tokenId=${encodeURIComponent(state.tokenId!)}`, {
@@ -50,22 +50,22 @@ export function CreateIntent() {
       setResponse(data);
       if (data?.data?.id) {
         setState((s) => ({ ...s, intentId: data.data.id }));
-        log(`Step 4: Intent created — ${data.data.id}`);
-        completeStep(4);
+        log(`Step ${num}: Intent created — ${data.data.id}`);
+        completeStep("intent");
       } else {
-        log("Step 4: Failed — " + JSON.stringify(data));
-        setLoading(4, false);
+        log(`Step ${num}: Failed — ` + JSON.stringify(data));
+        setLoading("intent", false);
       }
     } catch (err) {
-      log("Step 4: Error — " + (err as Error).message);
-      setLoading(4, false);
+      log(`Step ${num}: Error — ` + (err as Error).message);
+      setLoading("intent", false);
     }
   }
 
   const assuranceJson = state.assuranceData ? JSON.stringify(state.assuranceData, null, 2) : "";
 
   return (
-    <Step num={4} title="Create Intent" response={response}>
+    <Step stepKey="intent" title="Create Intent" response={response}>
       <Field label="Assurance Data">
         <textarea className="input min-h-[60px] resize-y" readOnly rows={3} value={assuranceJson} />
       </Field>
