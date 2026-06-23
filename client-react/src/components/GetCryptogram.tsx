@@ -5,12 +5,11 @@ import { CRYPTOGRAM_STYLE } from "../flow";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
-// Mastercard SCOF credential kinds. The cryptogram kinds require an amount +
-// currency; the dynamic CVC needs neither.
+// Mastercard SCOF credential kinds. Amount + currency are optional for every
+// kind; if an amount is sent, a currency must accompany it. DTVV is the default.
 const MC_DATA_TYPES = [
-  { value: "CARD_APPLICATION_CRYPTOGRAM_SHORT_FORM", label: "DSRP Cryptogram (short form)", needsAmount: true },
-  { value: "CARD_APPLICATION_CRYPTOGRAM_LONG_FORM", label: "DSRP Cryptogram (long form)", needsAmount: true },
-  { value: "DYNAMIC_CARD_SECURITY_CODE", label: "Dynamic CVC (DTVC)", needsAmount: false },
+  { value: "DTVV", label: "Dynamic CVC (DTVV)" },
+  { value: "TAVV", label: "DSRP Cryptogram (TAVV)" },
 ] as const;
 
 export function GetCryptogram() {
@@ -30,15 +29,16 @@ export function GetCryptogram() {
   const [txnCountry, setTxnCountry] = useState("US");
   const [txnUrl, setTxnUrl] = useState("https://www.bestbuy.com");
 
-  // Mastercard SCOF checkout fields.
-  const [dataType, setDataType] = useState<string>("DYNAMIC_CARD_SECURITY_CODE");
-  const [mcAmount, setMcAmount] = useState("59.98");
+  // Mastercard SCOF checkout fields. Amount is optional for every credential
+  // kind; it is sent only when filled in (and always with a currency).
+  const [dataType, setDataType] = useState<string>("DTVV");
+  const [mcAmount, setMcAmount] = useState("");
   const [mcCurrency, setMcCurrency] = useState("840");
 
   const [response, setResponse] = useState<unknown>(null);
   const [finalResult, setFinalResult] = useState<unknown>(null);
 
-  const mcNeedsAmount = MC_DATA_TYPES.find((t) => t.value === dataType)?.needsAmount ?? false;
+  const mcHasAmount = mcAmount.trim() !== "";
 
   async function handleGet() {
     setLoading("cryptogram", true);
@@ -53,7 +53,7 @@ export function GetCryptogram() {
       const attributes = isScof
         ? {
             dynamic_data_type: dataType,
-            ...(mcNeedsAmount && {
+            ...(mcHasAmount && {
               transaction_amount: parseFloat(mcAmount),
               transaction_currency_code: mcCurrency,
             }),
@@ -105,24 +105,23 @@ export function GetCryptogram() {
                 ))}
               </select>
             </Field>
-            {mcNeedsAmount && (
-              <Row>
-                <Field label="Transaction Amount">
-                  <input className="input" value={mcAmount} onChange={(e) => setMcAmount(e.target.value)} />
-                </Field>
-                <Field label="Currency Code (ISO 4217)">
-                  <select className="input" value={mcCurrency} onChange={(e) => setMcCurrency(e.target.value)}>
-                    <option value="840">840 — USD</option>
-                    <option value="978">978 — EUR</option>
-                    <option value="826">826 — GBP</option>
-                    <option value="392">392 — JPY</option>
-                    <option value="036">036 — AUD</option>
-                    <option value="124">124 — CAD</option>
-                  </select>
-                </Field>
-              </Row>
-            )}
+            <Row>
+              <Field label="Transaction Amount (optional)">
+                <input className="input" placeholder="e.g. 59.98" value={mcAmount} onChange={(e) => setMcAmount(e.target.value)} />
+              </Field>
+              <Field label="Currency Code (ISO 4217)">
+                <select className="input" value={mcCurrency} onChange={(e) => setMcCurrency(e.target.value)}>
+                  <option value="840">840 — USD</option>
+                  <option value="978">978 — EUR</option>
+                  <option value="826">826 — GBP</option>
+                  <option value="392">392 — JPY</option>
+                  <option value="036">036 — AUD</option>
+                  <option value="124">124 — CAD</option>
+                </select>
+              </Field>
+            </Row>
             <p className="text-xs text-gray-500 mt-1">
+              Amount is optional for every credential kind; when set, it is sent with the selected currency.
               SCOF checkout runs directly against the enrolled card — no intent binding.
             </p>
           </>

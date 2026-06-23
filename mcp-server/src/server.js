@@ -1194,7 +1194,7 @@ async function saveWalletState(ctx, buyerId, wallet) {
 //   - dpan: bullet-masked last4 (safe in markdown — no `*` collisions)
 //   - expiry MM/YY
 //   - cryptogram id (the REAL one, not the intent id)
-//   - cryptogram type (DAVV / TAVV / CAVV)
+//   - cryptogram type (Visa: DAVV / TAVV; Mastercard: TAVV / DTVV)
 //   - cryptogram value preview (short value shown whole; long values masked)
 //   - cryptogram expires_at (how long this one-time credential is valid)
 function maskPaymentCredential(credential, ctx = {}) {
