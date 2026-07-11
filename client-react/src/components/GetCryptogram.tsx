@@ -20,7 +20,9 @@ export function GetCryptogram() {
   // The two styles differ in request path, body shape, and form fields, so this
   // is the one deliberate exception to flow.ts's "config tables, no branching"
   // rule — a third style would add a branch here rather than just a table entry.
-  const isScof = CRYPTOGRAM_STYLE[state.network] === "scof";
+  const cryptogramStyle = CRYPTOGRAM_STYLE[state.network];
+  const isScof = cryptogramStyle === "scof";
+  const isAmex = cryptogramStyle === "amex";
 
   // Visa transaction-context (cart) fields.
   const [txnAmount, setTxnAmount] = useState("5.33");
@@ -35,6 +37,11 @@ export function GetCryptogram() {
   const [mcAmount, setMcAmount] = useState("");
   const [mcCurrency, setMcCurrency] = useState("840");
 
+  // Amex ACE payment-credentials fields.
+  const [amexAmount, setAmexAmount] = useState("5.33");
+  const [amexCurrency, setAmexCurrency] = useState("USD");
+  const [amexMerchant, setAmexMerchant] = useState("Best Buy");
+
   const [response, setResponse] = useState<unknown>(null);
   const [finalResult, setFinalResult] = useState<unknown>(null);
 
@@ -46,19 +53,27 @@ export function GetCryptogram() {
     try {
       // SCOF checkout is card-scoped with no intent; intent-style is
       // intent-scoped with a transaction-data cart.
-      const query = isScof
-        ? `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&cardId=${encodeURIComponent(state.cardId!)}`
-        : `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&intentId=${encodeURIComponent(state.intentId!)}`;
+      const query = isAmex
+        ? `/cryptograms?network=amex&tokenId=${encodeURIComponent(state.tokenId!)}&cardId=${encodeURIComponent(state.cardId!)}`
+        : isScof
+          ? `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&cardId=${encodeURIComponent(state.cardId!)}`
+          : `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&intentId=${encodeURIComponent(state.intentId!)}`;
 
-      const attributes = isScof
+      const attributes = isAmex
         ? {
+            transaction_amount: amexAmount,
+            transaction_currency_code: amexCurrency,
+            merchant_name: amexMerchant,
+          }
+        : isScof
+          ? {
             dynamic_data_type: dataType,
             ...(mcHasAmount && {
               transaction_amount: parseFloat(mcAmount),
               transaction_currency_code: mcCurrency,
             }),
           }
-        : {
+          : {
             transaction_data: [{
               merchant_country_code: txnCountry,
               transaction_amount: {
@@ -88,12 +103,36 @@ export function GetCryptogram() {
     }
   }
 
-  const title = isScof ? "Checkout — Get Cryptogram (SCOF)" : "Get Payment Cryptogram";
+  const title = isAmex
+    ? "Get Payment Credential (Amex ACE)"
+    : isScof
+      ? "Checkout — Get Cryptogram (SCOF)"
+      : "Get Payment Cryptogram";
 
   return (
     <>
       <Step stepKey="cryptogram" title={title} response={response}>
-        {isScof ? (
+        {isAmex ? (
+          <>
+            <Field label="Enrollment ID">
+              <input className="input" readOnly value={state.tokenId ?? ""} />
+            </Field>
+            <Row>
+              <Field label="Transaction Amount">
+                <input className="input" value={amexAmount} onChange={(e) => setAmexAmount(e.target.value)} />
+              </Field>
+              <Field label="Currency">
+                <input className="input" value={amexCurrency} onChange={(e) => setAmexCurrency(e.target.value)} />
+              </Field>
+            </Row>
+            <Field label="Merchant Name">
+              <input className="input" value={amexMerchant} onChange={(e) => setAmexMerchant(e.target.value)} />
+            </Field>
+            <p className="text-xs text-gray-500 mt-1">
+              Amex ACE requests payment credentials directly from the enrollment — no intent binding.
+            </p>
+          </>
+        ) : isScof ? (
           <>
             <Field label="Token ID">
               <input className="input" readOnly value={state.tokenId ?? ""} />
@@ -152,7 +191,7 @@ export function GetCryptogram() {
           </>
         )}
         <Button onClick={handleGet} disabled={loading}>
-          {isScof ? "Checkout" : "Get Cryptogram"}
+          {isAmex ? "Get Credential" : isScof ? "Checkout" : "Get Cryptogram"}
         </Button>
       </Step>
 

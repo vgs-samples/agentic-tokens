@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A reference/demo app for the VGS Agentic Tokens API. Sandbox only. It supports two card-network flows, with the UI adapting to whichever network the card resolves to:
+A reference/demo app for the VGS Agentic Tokens API. Sandbox only. It supports three card-network flows, with the UI adapting to whichever network the card resolves to:
 
 - **Visa** (full flow): Create Card → Enroll Token → Device Binding (FIDO/OTP) → Create Intent → Get Cryptogram → Confirm Transaction.
 - **Mastercard** (SCOF / Agent Pay): Create Card → Enroll Token → Get Cryptogram (checkout). No device binding, no intent ("verifiable intent" not yet enabled upstream), no confirmation.
+- **Amex** (ACE / Agentic Commerce): Create Card → Enroll Token → Get Payment Credential. No device binding, no intent, no confirmation.
 
-The network is resolved at card creation — from the preset test card or, for a custom PAN, the brand Collect.js reports (`networkFromCardType` in `client-react/src/flow.ts`) — and authoritatively reconciled from the enroll response (`reconcileNetwork`). The active flow drives which step blocks render and their numbering — see `FLOWS` in `flow.ts`. Mastercard test card: `2222690420064574`.
+The network is resolved at card creation — from the preset test card or, for a custom PAN, the brand Collect.js reports (`networkFromCardType` in `client-react/src/flow.ts`) — and authoritatively reconciled from the enroll response (`reconcileNetwork`). The active flow drives which step blocks render and their numbering — see `FLOWS` in `flow.ts`. Mastercard test card: `2222690420064574`; Amex test card: `379258101671003`, CID `1111`, exp `12/27`.
 
 ## Running
 
@@ -58,6 +59,7 @@ All routes proxy to VGS APIs with a Bearer token. The two base URLs are `VGS_API
 | `DELETE /api/intents?tokenId=&intentId=` | Cancel intent |
 | `POST /api/cryptograms?tokenId=&intentId=` | Visa — get DPAN + cryptogram (intent-scoped) |
 | `POST /api/cryptograms?tokenId=&cardId=` | Mastercard — SCOF checkout cryptogram (card-scoped, no intent) |
+| `POST /api/cryptograms?network=amex&tokenId=&cardId=` | Amex — ACE payment credentials (card-scoped, no intent) |
 
 ## Key Details
 
