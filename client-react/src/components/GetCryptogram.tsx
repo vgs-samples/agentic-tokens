@@ -35,7 +35,7 @@ export function GetCryptogram() {
   // kind; it is sent only when filled in (and always with a currency).
   const [dataType, setDataType] = useState<string>("DTVV");
   const [mcAmount, setMcAmount] = useState("");
-  const [mcCurrency, setMcCurrency] = useState("840");
+  const [mcCurrency, setMcCurrency] = useState("USD");
 
   // Amex ACE payment-credentials fields.
   const [amexAmount, setAmexAmount] = useState("5.33");
@@ -53,9 +53,7 @@ export function GetCryptogram() {
     try {
       // SCOF checkout is card-scoped with no intent; intent-style is
       // intent-scoped with a transaction-data cart.
-      const query = isAmex
-        ? `/cryptograms?network=amex&tokenId=${encodeURIComponent(state.tokenId!)}&cardId=${encodeURIComponent(state.cardId!)}`
-        : isScof
+      const query = isAmex || isScof
           ? `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&cardId=${encodeURIComponent(state.cardId!)}`
           : `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&intentId=${encodeURIComponent(state.intentId!)}`;
 
@@ -148,14 +146,14 @@ export function GetCryptogram() {
               <Field label="Transaction Amount (optional)">
                 <input className="input" placeholder="e.g. 59.98" value={mcAmount} onChange={(e) => setMcAmount(e.target.value)} />
               </Field>
-              <Field label="Currency Code (ISO 4217)">
+              <Field label="Currency">
                 <select className="input" value={mcCurrency} onChange={(e) => setMcCurrency(e.target.value)}>
-                  <option value="840">840 — USD</option>
-                  <option value="978">978 — EUR</option>
-                  <option value="826">826 — GBP</option>
-                  <option value="392">392 — JPY</option>
-                  <option value="036">036 — AUD</option>
-                  <option value="124">124 — CAD</option>
+                  <option value="USD">USD</option>
+                  <option value="EUR">EUR</option>
+                  <option value="GBP">GBP</option>
+                  <option value="JPY">JPY</option>
+                  <option value="AUD">AUD</option>
+                  <option value="CAD">CAD</option>
                 </select>
               </Field>
             </Row>

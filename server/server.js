@@ -1,6 +1,6 @@
 import express from "express";
 import { config as loadEnv } from "dotenv";
-import { apiBaseForAgenticPath, config as vgsConfig, callVgs, getAccessToken, hasCredentials } from "./vgs.js";
+import { config as vgsConfig, callVgs, getAccessToken, hasCredentials } from "./vgs.js";
 import { enrichCardSurface, enrichMissingCardSurfaces } from "./card-surface.js";
 
 loadEnv();
@@ -97,17 +97,14 @@ app.delete("/api/intents", handler(async (req, res) => {
 // Network-specific endpoints behind one route:
 //   Visa       — intent-scoped: /agentic-tokens/{tokenId}/intents/{intentId}/cryptograms
 //   Mastercard — card-scoped SCOF checkout (no intent): /cards/{cardId}/agentic-tokens/{tokenId}/cryptograms
-//   Amex       — card-scoped ACE payment credentials (no intent): /cards/{cardId}/amex/agentic-tokens/{tokenId}/cryptograms
-// The caller selects by passing intentId (Visa), cardId (Mastercard), or network=amex + cardId.
+//   Amex       — card-scoped ACE payment credentials (no intent): /cards/{cardId}/agentic-tokens/{tokenId}/cryptograms
+// The caller selects by passing intentId (Visa) or cardId (card-scoped networks).
 app.post("/api/cryptograms", handler(async (req, res) => {
-  const { tokenId, intentId, cardId, network } = req.query;
-  const path = network === "amex"
-    ? `/cards/${cardId}/amex/agentic-tokens/${tokenId}/cryptograms`
-    : cardId
+  const { tokenId, intentId, cardId } = req.query;
+  const path = cardId
     ? `/cards/${cardId}/agentic-tokens/${tokenId}/cryptograms`
     : `/agentic-tokens/${tokenId}/intents/${intentId}/cryptograms`;
-  const apiBase = network === "amex" ? apiBaseForAgenticPath(path) : vgsConfig.apiUrl;
-  const { status, data } = await callVgs(apiBase, "POST", path, req.body);
+  const { status, data } = await callVgs(vgsConfig.apiUrl, "POST", path, req.body);
   res.status(status).json(data);
 }));
 

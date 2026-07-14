@@ -58,8 +58,7 @@ All routes proxy to VGS APIs with a Bearer token. The two base URLs are `VGS_API
 | `PUT /api/intents?tokenId=&intentId=` | Update intent |
 | `DELETE /api/intents?tokenId=&intentId=` | Cancel intent |
 | `POST /api/cryptograms?tokenId=&intentId=` | Visa — get DPAN + cryptogram (intent-scoped) |
-| `POST /api/cryptograms?tokenId=&cardId=` | Mastercard — SCOF checkout cryptogram (card-scoped, no intent) |
-| `POST /api/cryptograms?network=amex&tokenId=&cardId=` | Amex — ACE payment credentials (card-scoped, no intent) |
+| `POST /api/cryptograms?tokenId=&cardId=` | Mastercard/Amex — card-scoped credential (no intent) |
 
 ## Key Details
 

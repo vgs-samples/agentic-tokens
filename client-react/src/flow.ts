@@ -28,6 +28,8 @@ export const FLOWS: Record<Network, StepKey[]> = {
  *  - "intent" — intent-scoped, with a transaction-data cart (Visa).
  *  - "scof"   — card-scoped SCOF checkout, no intent (Mastercard).
  *  - "amex"   — card-scoped Amex ACE payment credentials, no intent.
+ * Mastercard and Amex now share the same public URL; the style still controls
+ * the form fields and payload attributes.
  * A new network maps onto one of these styles (or adds a new one, which the
  * `Record<Network, …>` makes TypeScript surface in GetCryptogram).
  */

@@ -55,7 +55,7 @@ export async function fetchConfig(): Promise<AppConfig> {
   return res.json();
 }
 
-const collectJsLoaded: Record<string, Promise<void>> = {};
+const collectJsLoaded: Partial<Record<string, Promise<void>>> = {};
 
 export function loadCollectJs(url: string): Promise<void> {
   if (collectJsLoaded[url]) return collectJsLoaded[url];
