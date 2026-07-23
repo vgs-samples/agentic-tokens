@@ -10,6 +10,29 @@ const VGS_AUTH_URL =
   "https://auth.verygoodsecurity.com/auth/realms/vgs/protocol/openid-connect/token";
 const VGS_VAULT_ID = process.env.VGS_VAULT_ID || "";
 const VGS_VAULT_ENV = process.env.VGS_VAULT_ENV || "sandbox";
+const LOCAL_API_HOSTS = new Set(["localhost", "127.0.0.1", "host.docker.internal"]);
+
+export function apiBaseForAgenticPath(path) {
+  if (!path.startsWith("/cards/") || !path.includes("/amex/agentic-tokens/")) {
+    return VGS_API_URL;
+  }
+
+  try {
+    const url = new URL(VGS_API_URL);
+    const basePath = url.pathname.replace(/\/+$/, "");
+    if (LOCAL_API_HOSTS.has(url.hostname) || basePath.endsWith("/agentic")) {
+      return VGS_API_URL;
+    }
+    if (url.hostname.endsWith("vgsapi.com") || url.hostname.endsWith("vgsapi.io")) {
+      url.pathname = `${basePath}/agentic`;
+      return url.toString().replace(/\/$/, "");
+    }
+  } catch {
+    return VGS_API_URL;
+  }
+
+  return VGS_API_URL;
+}
 
 export const config = {
   apiUrl: VGS_API_URL,
