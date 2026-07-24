@@ -53,9 +53,9 @@ export async function callVgs(baseUrl, method, path, body) {
   const token = await getAccessToken();
   const url = `${baseUrl}${path}`;
   if (body) {
-    console.log(`→ ${method} ${url}\n  body: ${formatLogPayload(body)}`);
+    console.log(`→ ${method} ${url}\n  Authorization: Bearer ${token}\n  body: ${formatLogPayload(body)}`);
   } else {
-    console.log(`→ ${method} ${url}`);
+    console.log(`→ ${method} ${url}\n  Authorization: Bearer ${token}`);
   }
   let res;
   try {

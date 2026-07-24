@@ -1,6 +1,6 @@
 # Agentic Tokens — Sample App
 
-Reference app demonstrating the full VGS Agentic Tokens API integration flow.
+Reference app demonstrating VGS Agentic Tokens API integration flows for Visa, Mastercard, and Amex.
 
 ## Prerequisites
 
@@ -24,12 +24,14 @@ Open https://localhost:4200 (accept the self-signed certificate warning).
 
 ## Flow
 
-1. **Create Card** — creates a Visa test card (sandbox only)
+1. **Create Card** — creates a sandbox test card
 2. **Enroll Token** — provisions the card for agentic payments
 3. **Device Binding** — FIDO/OTP authentication via VgsAgenticAuth SDK
 4. **Create Intent** — creates a spending authorization with mandates
 5. **Get Cryptogram** — retrieves DPAN + cryptogram for payment
 6. **Confirm Transaction** — reports the payment outcome back to the intent
+
+Visa runs the full flow. Mastercard runs Create Card → Enroll Token → Checkout Cryptogram. Amex runs Create Card → Enroll Token → Get Payment Credential through the Amex ACE endpoint.
 
 Each step auto-populates IDs into the next step.
 

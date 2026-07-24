@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchAccessToken, fetchConfig } from "../api";
+import { fetchAccessToken, fetchConfig, loadCollectJs } from "../api";
 import { useAppState, useStepStatus } from "../useAppState";
 import { DEFAULT_NETWORK, NETWORK_META, networkFromCardType, type Network } from "../flow";
 import { Step } from "./Step";
@@ -12,7 +12,7 @@ const FIELD_CSS = {
   "&::placeholder": { color: "#9ca3af" },
 };
 
-type CardOption = "visa1" | "visa2" | "mastercard" | "custom";
+type CardOption = "visa1" | "visa2" | "mastercard" | "amex" | "custom";
 
 interface TestCard {
   id: CardOption;
@@ -27,6 +27,7 @@ const TEST_CARDS: TestCard[] = [
   { id: "visa1", label: "Visa — ...1569 / CVV 814 / 12/27", pan: "4622943123121569", cvv: "814", exp: "12 / 27", network: "visa" },
   { id: "visa2", label: "Visa — ...1478 / CVV 845 / 12/27", pan: "4622943123121478", cvv: "845", exp: "12 / 27", network: "visa" },
   { id: "mastercard", label: "Mastercard — ...4574 / CVV 123 / 12/27", pan: "2222690420064574", cvv: "123", exp: "12 / 27", network: "mastercard" },
+  { id: "amex", label: "Amex — ...1003 / CID 1111 / 12/27", pan: "379258101671003", cvv: "1111", exp: "12 / 27", network: "amex" },
 ];
 
 export function CreateCard() {
@@ -64,6 +65,7 @@ export function CreateCard() {
           setInitError("VGS_VAULT_ID is not configured on the server.");
           return;
         }
+        await loadCollectJs(cfg.collectJsUrl);
         if (!window.VGSCollect) {
           setInitError("VGS Collect.js failed to load.");
           return;

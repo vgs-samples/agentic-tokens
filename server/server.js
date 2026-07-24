@@ -40,7 +40,11 @@ app.get("/api/token", handler(async (req, res) => {
 // GET /api/config — runtime config for the browser (vault id, environment)
 // Keeps client builds env-agnostic: no Vite rebuild required when the vault changes.
 app.get("/api/config", (req, res) => {
-  res.json({ vaultId: vgsConfig.vaultId, vaultEnv: vgsConfig.vaultEnv });
+  res.json({
+    vaultId: vgsConfig.vaultId,
+    vaultEnv: vgsConfig.vaultEnv,
+    collectJsUrl: process.env.VGS_COLLECT_JS || "https://js.verygoodvault.com/vgs-collect/4.0.0/vgs-collect.js",
+  });
 });
 
 // NOTE: Step 1 (create card) now lives entirely in the browser via VGS Collect.js.
@@ -90,10 +94,11 @@ app.delete("/api/intents", handler(async (req, res) => {
 }));
 
 // POST /api/cryptograms — get payment cryptogram (Agentic API)
-// Two network-specific endpoints behind one route:
+// Network-specific endpoints behind one route:
 //   Visa       — intent-scoped: /agentic-tokens/{tokenId}/intents/{intentId}/cryptograms
 //   Mastercard — card-scoped SCOF checkout (no intent): /cards/{cardId}/agentic-tokens/{tokenId}/cryptograms
-// The caller selects by passing intentId (Visa) or cardId (Mastercard).
+//   Amex       — card-scoped ACE payment credentials (no intent): /cards/{cardId}/agentic-tokens/{tokenId}/cryptograms
+// The caller selects by passing intentId (Visa) or cardId (card-scoped networks).
 app.post("/api/cryptograms", handler(async (req, res) => {
   const { tokenId, intentId, cardId } = req.query;
   const path = cardId

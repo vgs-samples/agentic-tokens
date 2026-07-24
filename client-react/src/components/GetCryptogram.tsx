@@ -5,11 +5,13 @@ import { CRYPTOGRAM_STYLE } from "../flow";
 import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
-// Mastercard SCOF credential kinds. Amount + currency are optional for every
-// kind; if an amount is sent, a currency must accompany it. DTVV is the default.
-const MC_DATA_TYPES = [
-  { value: "DTVV", label: "Dynamic CVC (DTVV)" },
-  { value: "TAVV", label: "DSRP Cryptogram (TAVV)" },
+const CURRENCY_CODES = [
+  { value: "840", label: "840 - USD" },
+  { value: "978", label: "978 - EUR" },
+  { value: "826", label: "826 - GBP" },
+  { value: "392", label: "392 - JPY" },
+  { value: "036", label: "036 - AUD" },
+  { value: "124", label: "124 - CAD" },
 ] as const;
 
 export function GetCryptogram() {
@@ -20,7 +22,10 @@ export function GetCryptogram() {
   // The two styles differ in request path, body shape, and form fields, so this
   // is the one deliberate exception to flow.ts's "config tables, no branching"
   // rule — a third style would add a branch here rather than just a table entry.
-  const isScof = CRYPTOGRAM_STYLE[state.network] === "scof";
+  const cryptogramStyle = CRYPTOGRAM_STYLE[state.network];
+  const isScof = cryptogramStyle === "scof";
+  const isAmex = cryptogramStyle === "amex";
+  const isCardScoped = isAmex || isScof;
 
   // Visa transaction-context (cart) fields.
   const [txnAmount, setTxnAmount] = useState("5.33");
@@ -29,16 +34,13 @@ export function GetCryptogram() {
   const [txnCountry, setTxnCountry] = useState("US");
   const [txnUrl, setTxnUrl] = useState("https://www.bestbuy.com");
 
-  // Mastercard SCOF checkout fields. Amount is optional for every credential
-  // kind; it is sent only when filled in (and always with a currency).
-  const [dataType, setDataType] = useState<string>("DTVV");
-  const [mcAmount, setMcAmount] = useState("");
-  const [mcCurrency, setMcCurrency] = useState("840");
+  // Mastercard SCOF and Amex ACE share the same demo checkout payload.
+  const [cardScopedAmount, setCardScopedAmount] = useState("5.33");
+  const [cardScopedCurrency, setCardScopedCurrency] = useState("840");
+  const [cardScopedMerchant, setCardScopedMerchant] = useState("Best Buy");
 
   const [response, setResponse] = useState<unknown>(null);
   const [finalResult, setFinalResult] = useState<unknown>(null);
-
-  const mcHasAmount = mcAmount.trim() !== "";
 
   async function handleGet() {
     setLoading("cryptogram", true);
@@ -46,17 +48,15 @@ export function GetCryptogram() {
     try {
       // SCOF checkout is card-scoped with no intent; intent-style is
       // intent-scoped with a transaction-data cart.
-      const query = isScof
-        ? `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&cardId=${encodeURIComponent(state.cardId!)}`
-        : `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&intentId=${encodeURIComponent(state.intentId!)}`;
+      const query = isCardScoped
+          ? `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&cardId=${encodeURIComponent(state.cardId!)}`
+          : `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&intentId=${encodeURIComponent(state.intentId!)}`;
 
-      const attributes = isScof
+      const attributes = isCardScoped
         ? {
-            dynamic_data_type: dataType,
-            ...(mcHasAmount && {
-              transaction_amount: parseFloat(mcAmount),
-              transaction_currency_code: mcCurrency,
-            }),
+            transaction_amount: cardScopedAmount,
+            transaction_currency_code: cardScopedCurrency,
+            merchant_name: cardScopedMerchant,
           }
         : {
             transaction_data: [{
@@ -88,41 +88,37 @@ export function GetCryptogram() {
     }
   }
 
-  const title = isScof ? "Checkout — Get Cryptogram (SCOF)" : "Get Payment Cryptogram";
+  const title = isAmex
+    ? "Get Payment Credential (Amex ACE)"
+    : isScof
+      ? "Checkout — Get Cryptogram (SCOF)"
+      : "Get Payment Cryptogram";
 
   return (
     <>
       <Step stepKey="cryptogram" title={title} response={response}>
-        {isScof ? (
+        {isCardScoped ? (
           <>
-            <Field label="Token ID">
+            <Field label={isAmex ? "Enrollment ID" : "Token ID"}>
               <input className="input" readOnly value={state.tokenId ?? ""} />
             </Field>
-            <Field label="Credential Type">
-              <select className="input" value={dataType} onChange={(e) => setDataType(e.target.value)}>
-                {MC_DATA_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
-              </select>
-            </Field>
             <Row>
-              <Field label="Transaction Amount (optional)">
-                <input className="input" placeholder="e.g. 59.98" value={mcAmount} onChange={(e) => setMcAmount(e.target.value)} />
+              <Field label="Transaction Amount">
+                <input className="input" value={cardScopedAmount} onChange={(e) => setCardScopedAmount(e.target.value)} />
               </Field>
-              <Field label="Currency Code (ISO 4217)">
-                <select className="input" value={mcCurrency} onChange={(e) => setMcCurrency(e.target.value)}>
-                  <option value="840">840 — USD</option>
-                  <option value="978">978 — EUR</option>
-                  <option value="826">826 — GBP</option>
-                  <option value="392">392 — JPY</option>
-                  <option value="036">036 — AUD</option>
-                  <option value="124">124 — CAD</option>
+              <Field label="Currency">
+                <select className="input" value={cardScopedCurrency} onChange={(e) => setCardScopedCurrency(e.target.value)}>
+                  {CURRENCY_CODES.map((currency) => (
+                    <option key={currency.value} value={currency.value}>{currency.label}</option>
+                  ))}
                 </select>
               </Field>
             </Row>
+            <Field label="Merchant Name">
+              <input className="input" value={cardScopedMerchant} onChange={(e) => setCardScopedMerchant(e.target.value)} />
+            </Field>
             <p className="text-xs text-gray-500 mt-1">
-              Amount is optional for every credential kind; when set, it is sent with the selected currency.
-              SCOF checkout runs directly against the enrolled card — no intent binding.
+              {isAmex ? "Amex ACE" : "SCOF checkout"} runs directly against the enrolled card — no intent binding.
             </p>
           </>
         ) : (
@@ -152,7 +148,7 @@ export function GetCryptogram() {
           </>
         )}
         <Button onClick={handleGet} disabled={loading}>
-          {isScof ? "Checkout" : "Get Cryptogram"}
+          {isAmex ? "Get Credential" : isScof ? "Checkout" : "Get Cryptogram"}
         </Button>
       </Step>
 
