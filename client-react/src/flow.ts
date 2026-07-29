@@ -7,7 +7,7 @@
  */
 
 /** Card networks the demo supports. */
-export type Network = "visa" | "mastercard";
+export type Network = "visa" | "mastercard" | "amex";
 
 /** Stable identifier for each step, independent of its position in a flow. */
 export type StepKey =
@@ -62,15 +62,19 @@ export function flowFromEnrollResponse(enrollResponse: any): {
 }
 
 /**
- * Which optional phases of the flow each network runs:
+ * Which optional phases of the flow each network runs. This is what replaced the old
+ * fixed `FLOWS` table: only Visa has phases beyond the cryptogram, and which of *those*
+ * run depends on the enroll response rather than the network alone.
  *  - `enrollment`   — the post-enroll cardholder-verification / complete-enrollment phase.
- *  - `intent`       — spending intents (Mastercard's "verifiable intent" isn't enabled upstream yet).
- *  - `confirmation` — reporting the outcome back (SCOF checkout needs none).
+ *  - `intent`       — spending intents ("verifiable intent" isn't enabled upstream for
+ *    Mastercard SCOF or Amex ACE yet).
+ *  - `confirmation` — reporting the outcome back (card-scoped checkout needs none).
  * See docs/temporary-mc-user-guide.md in the maranui repo for the Mastercard shape.
  */
 const NETWORK_PHASES: Record<Network, { enrollment: boolean; intent: boolean; confirmation: boolean }> = {
   visa: { enrollment: true, intent: true, confirmation: true },
   mastercard: { enrollment: false, intent: false, confirmation: false },
+  amex: { enrollment: false, intent: false, confirmation: false },
 };
 
 /**
@@ -130,13 +134,17 @@ export const CARDHOLDER_VERIFICATION_META: Record<
  * How a network's cryptogram is requested, decoupled from the network name:
  *  - "intent" — intent-scoped, with a transaction-data cart (Visa).
  *  - "scof"   — card-scoped SCOF checkout, no intent (Mastercard).
+ *  - "amex"   — card-scoped Amex ACE payment credentials, no intent.
+ * Mastercard and Amex now share the same public URL; the style still controls
+ * the form fields and payload attributes.
  * A new network maps onto one of these styles (or adds a new one, which the
  * `Record<Network, …>` makes TypeScript surface in GetCryptogram).
  */
-export type CryptogramStyle = "intent" | "scof";
+export type CryptogramStyle = "intent" | "scof" | "amex";
 export const CRYPTOGRAM_STYLE: Record<Network, CryptogramStyle> = {
   visa: "intent",
   mastercard: "scof",
+  amex: "amex",
 };
 
 /** Display metadata for a network — label and Tailwind badge classes. */
@@ -147,6 +155,7 @@ export interface NetworkMeta {
 export const NETWORK_META: Record<Network, NetworkMeta> = {
   visa: { label: "Visa", badgeCss: "bg-blue-100 text-blue-800" },
   mastercard: { label: "Mastercard · SCOF", badgeCss: "bg-orange-100 text-orange-800" },
+  amex: { label: "Amex · ACE", badgeCss: "bg-sky-100 text-sky-800" },
 };
 
 /** The network assumed before any detection has run. */
@@ -160,9 +169,14 @@ export const DEFAULT_NETWORK: Network = "visa";
 const COLLECT_CARD_TYPES: Record<string, Network> = {
   visa: "visa",
   mastercard: "mastercard",
+  "master card": "mastercard",
+  amex: "amex",
+  "american express": "amex",
+  americanexpress: "amex",
+  "american-express": "amex",
 };
 export function networkFromCardType(cardType: string | null | undefined): Network | null {
-  return cardType ? COLLECT_CARD_TYPES[cardType] ?? null : null;
+  return cardType ? COLLECT_CARD_TYPES[cardType.trim().toLowerCase()] ?? null : null;
 }
 
 /**
@@ -174,5 +188,6 @@ export function networkFromCardType(cardType: string | null | undefined): Networ
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function reconcileNetwork(enrollResponse: any, fallback: Network): Network {
   if (enrollResponse?.data?.attributes?.enrollment?.digital_card_id) return "mastercard";
+  if (enrollResponse?.data?.attributes?.enrollment?.network === "amex") return "amex";
   return fallback;
 }

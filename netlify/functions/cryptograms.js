@@ -2,10 +2,11 @@ import { callVgs, config } from "../../server/vgs.js";
 import { json, wrap } from "./_lib.js";
 
 // POST /api/cryptograms — get payment cryptogram
-// Two network-specific endpoints behind one route:
+// Network-specific endpoints behind one route:
 //   Visa       — intent-scoped: /agentic-tokens/{tokenId}/intents/{intentId}/cryptograms
 //   Mastercard — card-scoped SCOF checkout (no intent): /cards/{cardId}/agentic-tokens/{tokenId}/cryptograms
-// The caller selects by passing intentId (Visa) or cardId (Mastercard).
+//   Amex       — card-scoped ACE payment credentials (no intent): /cards/{cardId}/agentic-tokens/{tokenId}/cryptograms
+// The caller selects by passing intentId (Visa) or cardId (card-scoped networks).
 export default wrap(async (req) => {
   const url = new URL(req.url);
   const tokenId = url.searchParams.get("tokenId");

@@ -6,9 +6,10 @@ interface StepProps {
   title: string;
   children: ReactNode;
   response?: unknown;
+  responseMeta?: string | null;
 }
 
-export function Step({ stepKey, title, children, response }: StepProps) {
+export function Step({ stepKey, title, children, response, responseMeta }: StepProps) {
   const { goToStep } = useAppState();
   const { active, done, loading, disabled, num, inFlow } = useStepStatus(stepKey);
   const [collapsed, setCollapsed] = useState(false);
@@ -51,9 +52,16 @@ export function Step({ stepKey, title, children, response }: StepProps) {
         <div className="px-4 pb-4 space-y-2">
           {children}
           {response != null && (
-            <pre className="mt-3 bg-[#1e1e1e] text-[#d4d4d4] p-3 rounded text-xs max-h-72 overflow-auto whitespace-pre-wrap break-all">
-              {JSON.stringify(response, null, 2)}
-            </pre>
+            <div className="mt-3 overflow-hidden rounded border border-gray-800 bg-[#1e1e1e]">
+              {responseMeta && (
+                <div className="border-b border-gray-700 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-gray-300">
+                  {responseMeta}
+                </div>
+              )}
+              <pre className="text-[#d4d4d4] p-3 text-xs max-h-72 overflow-auto whitespace-pre-wrap break-all m-0">
+                {typeof response === "string" ? response : JSON.stringify(response, null, 2)}
+              </pre>
+            </div>
           )}
         </div>
       )}

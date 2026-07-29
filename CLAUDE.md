@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A reference/demo app for the VGS Agentic Tokens API. Sandbox only. It supports two card-network flows, with the UI adapting to whichever network the card resolves to:
+A reference/demo app for the VGS Agentic Tokens API. Sandbox only. It supports three card-network flows, with the UI adapting to whichever network the card resolves to:
 
 - **Visa** (full flow): Create Card → Enroll Token → Device Binding (FIDO/OTP) → Create Intent → Get Cryptogram → Confirm Transaction.
 - **Mastercard** (SCOF / Agent Pay): Create Card → Enroll Token → Get Cryptogram (checkout). No device binding, no intent ("verifiable intent" not yet enabled upstream), no confirmation.
+- **Amex** (ACE / Agentic Commerce): Create Card → Enroll Token → Get Payment Credential. No device binding, no intent, no confirmation.
 
 **Cardholder verification is discovered from the API, never configured here.** The enroll response
 carries `data.attributes.cardholder_verification` (`passkey` / `otp` / `none`) and
@@ -33,7 +34,7 @@ All client-side ID&V code is deliberately isolated in **`client-react/src/idv.ts
 that way: don't spread ID&V calls into components, and don't extend the auth library to cover this
 flow — the library exists for the iframe/passkey lifecycle, which ID&V doesn't have.
 
-The network is resolved at card creation — from the preset test card or, for a custom PAN, the brand Collect.js reports (`networkFromCardType` in `client-react/src/flow.ts`) — and authoritatively reconciled from the enroll response (`reconcileNetwork`). The active flow drives which step blocks render and their numbering — see `stepsFor` and `NETWORK_PHASES` in `flow.ts`. Mastercard test card: `2222690420064574`.
+The network is resolved at card creation — from the preset test card or, for a custom PAN, the brand Collect.js reports (`networkFromCardType` in `client-react/src/flow.ts`) — and authoritatively reconciled from the enroll response (`reconcileNetwork`). The active flow drives which step blocks render and their numbering — see `stepsFor` and `NETWORK_PHASES` in `flow.ts`. Mastercard test card: `2222690420064574`; Amex test card: `379258101671003`, CID `1111`, exp `12/27`.
 
 ## Running
 
@@ -77,7 +78,7 @@ All routes proxy to VGS APIs with a Bearer token. The two base URLs are `VGS_API
 | `GET /api/token` | Returns access token for browser SDK |
 | `POST /api/cards` | CMP — create test card |
 | `POST /api/cards/:cardId/agentic-tokens` | Enroll card for agentic payments |
-| `GET /api/step-up-options?tokenId=&clientRefId=&reasonCode=` | ID&V — cardholder verification options |
+| `GET /api/step-up-options?tokenId=&clientRefId=` | ID&V — cardholder verification options (`clientRefId` required, URL-safe) |
 | `POST /api/otp/:identifier?tokenId=` | ID&V — deliver the one-time code via the chosen method |
 | `POST /api/otp?tokenId=` | ID&V — verify the code (completes verification) |
 | `POST /api/agentic-enrollments?tokenId=` | ID&V — finish enrollment after verification |
@@ -85,7 +86,7 @@ All routes proxy to VGS APIs with a Bearer token. The two base URLs are `VGS_API
 | `PUT /api/intents?tokenId=&intentId=` | Update intent |
 | `DELETE /api/intents?tokenId=&intentId=` | Cancel intent |
 | `POST /api/cryptograms?tokenId=&intentId=` | Visa — get DPAN + cryptogram (intent-scoped) |
-| `POST /api/cryptograms?tokenId=&cardId=` | Mastercard — SCOF checkout cryptogram (card-scoped, no intent) |
+| `POST /api/cryptograms?tokenId=&cardId=` | Mastercard/Amex — card-scoped credential (no intent) |
 
 ## Key Details
 

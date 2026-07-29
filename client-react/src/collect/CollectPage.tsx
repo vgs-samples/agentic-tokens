@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchAccessToken, fetchConfig } from "../api";
+import { fetchAccessToken, fetchConfig, loadCollectJs } from "../api";
 
 const FIELD_CSS = {
   "font-size": "14px",
@@ -56,6 +56,7 @@ export function CollectPage() {
         const cfg = await fetchConfig();
         if (cancelled) return;
         if (!cfg.vaultId) throw new Error("VGS vault not configured on server");
+        await loadCollectJs(cfg.collectJsUrl);
         if (!window.VGSCollect) throw new Error("Collect.js failed to load");
 
         const form = await window.VGSCollect.session({
