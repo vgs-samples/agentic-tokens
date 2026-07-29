@@ -24,16 +24,40 @@ Open https://localhost:4200 (accept the self-signed certificate warning).
 
 ## Flow
 
+How the cardholder is verified depends on your vault's configuration, and **the app finds out
+from the API**: the enroll response (step 2) reports `cardholder_verification` and
+`agentic_enrollment_required`, and the remaining steps follow from those two fields. Nothing to
+configure — the header shows which flow was detected.
+
+**Passkey (FIDO)** — `cardholder_verification: "passkey"`:
+
 1. **Create Card** — creates a Visa test card (sandbox only)
 2. **Enroll Token** — provisions the card for agentic payments
-3. **Device Binding** — FIDO/OTP authentication via VgsAgenticAuth SDK
-4. **Create Intent** — creates a spending authorization with mandates
+3. **Device Binding** — FIDO/OTP authentication via the VgsAgenticAuth library (Visa iframe)
+4. **Create Intent** — creates a spending authorization with mandates, using the `assurance_data` from step 3
 5. **Get Cryptogram** — retrieves DPAN + cryptogram for payment
 6. **Confirm Transaction** — reports the payment outcome back to the intent
 
+**Cardholder ID&V** — `cardholder_verification: "otp"`, for passkey-exempt vaults. No iframe, no passkey, no `assurance_data`:
+
+1. **Create Card**
+2. **Enroll Token**
+3. **Cardholder Verification (ID&V)** — fetch verification options, send a one-time code, submit it
+4. **Complete Enrollment** — finishes enrolling the token; required after verification and before any intent
+5. **Create Intent** — no `assurance_data` field
+6. **Get Cryptogram**
+7. **Confirm Transaction**
+
+A vault may also report `cardholder_verification: "none"` — no verification step at all — in
+which case the app goes straight from enrollment to creating an intent.
+
 Each step auto-populates IDs into the next step.
 
-> **Sandbox tip:** When prompted for an OTP code during Device Binding (step 3), use `456789` — it is always accepted in sandbox.
+The entire client side of the ID&V flow lives in one file — **`client-react/src/idv.ts`** — as four
+plain `fetch` calls with no library dependency. If you're implementing this flow yourself, read
+that file; the components around it are just forms.
+
+> **Sandbox tip:** When prompted for a one-time code, use `456789` — it is always accepted in sandbox.
 
 ## Environment Variables
 

@@ -49,32 +49,15 @@ export function DeviceBinding({ consumerEmail }: Props) {
         merchantName,
       });
 
-      // Server-driven flow selection. Try the iframe-free step-up path first: for a
-      // passkey-exempt tenant the server returns needsPasskey === false and we skip the
-      // Visa iframe / passkey entirely. If the tenant still needs a passkey (or the probe
-      // isn't applicable), fall back to the full-FIDO iframe session.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let session: any = null;
-      try {
-        session = await flow.startStepUpSession();
-        if (session.needsPasskey !== false) {
-          session.destroy?.();
-          session = null;
-        } else {
-          log(`Step ${num}: passkey-exempt tenant — iframe-free step-up (no passkey)`);
-        }
-      } catch (probeErr) {
-        log(`Step ${num}: step-up-options not usable (${(probeErr as { message: string }).message}); using iframe flow`);
-      }
-      if (!session) {
-        session = await flow.startSession(containerRef.current);
-      }
+      const session: any = await flow.startSession(containerRef.current);
       sessionRef.current = session;
       log(`Step ${num}: Session created. needsOtp=${session.needsOtp} needsPasskey=${session.needsPasskey}`);
 
-      // Full-FIDO only: keep the passkey iframe hidden until the ceremony. (Iframe-free
-      // sessions have no iframe.)
-      if (session.needsPasskey === false && session.iframe) {
+      // The only place iframe visibility is decided. The sample-only sizing in
+      // vgs-agentic-auth.js renders it inline; a passkey-exempt vault runs no ceremony, so
+      // there is nothing for the cardholder to see.
+      if (session.needsPasskey === false) {
         session.iframe.style.display = "none";
       }
 
@@ -137,32 +120,18 @@ export function DeviceBinding({ consumerEmail }: Props) {
     }
   }
 
-  function handleSkip() {
-    log(`Step ${num}: Skipped — passkey-exempt tenant; backend synthesizes the assurance waiver`);
-    const session = sessionRef.current as { destroy?: () => void } | null;
-    if (session?.destroy) session.destroy();
-    sessionRef.current = null;
-    setState((s) => ({ ...s, assuranceData: null }));
-    setResponse({ skipped: true, note: "Device binding bypassed (passkey-exempt)" });
-    completeStep("deviceBinding");
-  }
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async function handleAuthenticate(sessionArg?: any) {
     setLoading("deviceBinding", true);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const session = sessionArg ?? (sessionRef.current as any);
-    if (session.needsPasskey === false) {
-      // Passkey-exempt: no ceremony, no iframe. authenticate() resolves immediately and
-      // the backend synthesizes the assuranceData waiver.
-      log(`Step ${num}: Passkey exempt — skipping passkey ceremony (backend synthesizes the waiver)`);
-    } else {
-      // Full FIDO: reveal the iframe for the passkey/biometric prompt.
-      if (session.iframe) {
-        session.iframe.style.display = "block";
-      }
-      log(`Step ${num}: Running FIDO ceremony...`);
-    }
+    // Passkey-exempt: authenticate() resolves immediately without a ceremony and the backend
+    // synthesizes the assuranceData waiver, so there is nothing to do but say so.
+    log(
+      session.needsPasskey === false
+        ? `Step ${num}: Passkey exempt — skipping passkey ceremony (backend synthesizes the waiver)`
+        : `Step ${num}: Running FIDO ceremony...`,
+    );
     try {
       const assuranceData = await session.authenticate();
       session.destroy();
@@ -210,15 +179,11 @@ export function DeviceBinding({ consumerEmail }: Props) {
       <Field label="Merchant Name (optional)">
         <input className="input" placeholder="e.g. Best Buy" value={merchantName} onChange={(e) => setMerchantName(e.target.value)} />
       </Field>
-      <div className="flex gap-2">
-        <Button onClick={handleStartSession} disabled={sessionStarted || loading}>Start Session</Button>
-        <Button onClick={handleSkip} disabled={loading} variant="secondary">Skip — manual override</Button>
-      </div>
+      <Button onClick={handleStartSession} disabled={sessionStarted || loading}>Start Session</Button>
       <p className="text-xs text-gray-500 mt-1">
-        The flow is <strong>server-driven</strong>: Start Session reads <code>needsOtp</code> / <code>needsPasskey</code>
-        from the device-attestation response. A passkey-exempt tenant
-        (<code>visa_fido_mode: passkey_exempt</code> or <code>passkey_exempt_idv</code>) skips the passkey
-        automatically — OTP still shows for <code>passkey_exempt_idv</code>. Skip is only a manual override.
+        The library reads <code>needsOtp</code> / <code>needsPasskey</code> from the device-attestation
+        response, so the server decides which prompts run. Vaults that verify with a one-time code
+        instead of a passkey use the <strong>Cardholder ID&amp;V</strong> mode in the header.
       </p>
 
       {otpVisible && (

@@ -58,6 +58,9 @@ const ENVIRONMENTS = {
 
 // const CLIENT_APP_ID = "VGSVicProvisionToken";
 const CLIENT_APP_ID = "VGS";
+
+// Sample-app only: the demo renders the Visa passkey prompt inline, so the iframe is
+// sized instead of hidden. The library ships it 0x0 and leaves sizing to the integrator.
 const VISA_IFRAME_WIDTH = "390";
 const VISA_IFRAME_HEIGHT = "400";
 
@@ -97,36 +100,6 @@ async function _postJson(apiBase, path, body, accessToken) {
       headers,
       body: JSON.stringify(body),
     });
-  } catch (err) {
-    throw new VgsAgenticAuthError(`Network error: ${err.message}`);
-  }
-
-  let data;
-  try {
-    data = await res.json();
-  } catch {
-    data = null;
-  }
-
-  if (!res.ok) {
-    const msg = data?.detail || data?.error || res.statusText;
-    throw new VgsAgenticAuthError(`API ${res.status}: ${msg}`, {
-      status: res.status,
-      code: data?.error,
-    });
-  }
-  return data;
-}
-
-async function _getJson(apiBase, path, accessToken) {
-  const url = `${apiBase}${path}`;
-  const headers = { Accept: "application/json" };
-  if (accessToken) {
-    headers["Authorization"] = `Bearer ${accessToken}`;
-  }
-  let res;
-  try {
-    res = await fetch(url, { method: "GET", headers });
   } catch (err) {
     throw new VgsAgenticAuthError(`Network error: ${err.message}`);
   }
@@ -289,7 +262,8 @@ class Session {
   }
 
   /**
-   * The library-managed hidden iframe element.
+   * The library-managed iframe element.
+   * Useful for showing/hiding during the FIDO ceremony (e.g. iframe.width = 300).
    * @type {HTMLIFrameElement}
    */
   get iframe() {
@@ -436,7 +410,7 @@ class Session {
     if (this._state === STATE_DESTROYED) return;
     this._closeSession();
     try {
-      this._iframeEl?.remove();
+      this._iframeEl.remove();
     } catch {
       /* ignore */
     }
@@ -459,18 +433,15 @@ class Session {
 
   _closeSession() {
     if (this._sessionClosed) return;
-    // Iframe-free (passkey-exempt) sessions have no iframe to signal.
-    if (this._iframeEl) {
-      try {
-        _sendIframeCommand(
-          this._iframeEl,
-          this._config._iframeOrigin,
-          this._requestID,
-          { type: "CLOSE_AUTH_SESSION" },
-        );
-      } catch {
-        // iframe may already be gone — ignore
-      }
+    try {
+      _sendIframeCommand(
+        this._iframeEl,
+        this._config._iframeOrigin,
+        this._requestID,
+        { type: "CLOSE_AUTH_SESSION" },
+      );
+    } catch {
+      // iframe may already be gone — ignore
     }
     this._sessionClosed = true;
   }
@@ -622,29 +593,6 @@ class VgsAgenticAuth {
     );
 
     return session;
-  }
-
-  /**
-   * Start an iframe-free step-up (ID&V) session for passkey-exempt tenants.
-   *
-   * Fetches step-up options over the API (no Visa iframe, no device fingerprint, no
-   * passkey) and returns a Session driving the same `needsOtp` / `otpMethods` /
-   * `requestOtp` / `submitOtp` / `authenticate` surface as `startSession()`. For a
-   * passkey-exempt tenant the returned session reports `needsPasskey === false` and
-   * `authenticate()` resolves without a ceremony; the backend supplies the assuranceData
-   * waiver. If the server reports the tenant still needs a passkey, use `startSession()`.
-   *
-   * @returns {Promise<Session>}
-   */
-  async startStepUpSession() {
-    const path =
-      `/agentic-tokens/${this.tokenId}/step-up-options` +
-      `?client_ref_id=${encodeURIComponent(this.clientRefId)}&reason_code=CARDHOLDER_STEPUP`;
-    const attestationResult = await _getJson(this.apiBase, path, this.accessToken);
-
-    // No iframe: pass a null element and empty session/browser context. The step-up and
-    // OTP calls need none of it, and authenticate() no-ops for passkey-exempt tenants.
-    return new Session(this, null, null, {}, {}, "", attestationResult);
   }
 }
 

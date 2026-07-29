@@ -56,6 +56,55 @@ app.post("/api/cards/:cardId/agentic-tokens", handler(async (req, res) => {
   res.status(status).json(data);
 }));
 
+// --- Cardholder ID&V (passkey-exempt vaults) ---
+// The browser drives these through this proxy; see client-react/src/idv.ts.
+
+// GET /api/step-up-options?tokenId=&clientRefId= — verification options.
+// client_ref_id is required by the API and must be URL-safe (letters, digits, . _ : -).
+app.get("/api/step-up-options", handler(async (req, res) => {
+  const { tokenId, clientRefId } = req.query;
+  const query = new URLSearchParams({ client_ref_id: clientRefId ?? "" });
+  const { status, data } = await callVgs(
+    vgsConfig.apiUrl, "GET",
+    `/agentic-tokens/${tokenId}/step-up-options?${query}`
+  );
+  res.status(status).json(data);
+}));
+
+// POST /api/otp/:identifier?tokenId= — deliver the code via the chosen method
+app.post("/api/otp/:identifier", handler(async (req, res) => {
+  const { tokenId } = req.query;
+  const { status, data } = await callVgs(
+    vgsConfig.apiUrl, "POST",
+    // Identifiers are opaque base64 — re-encode so "/" or "=" can't reshape the path.
+    `/agentic-tokens/${tokenId}/otp/${encodeURIComponent(req.params.identifier)}`,
+    req.body
+  );
+  res.status(status).json(data);
+}));
+
+// POST /api/otp?tokenId= — verify the code (completes ID&V)
+app.post("/api/otp", handler(async (req, res) => {
+  const { tokenId } = req.query;
+  const { status, data } = await callVgs(
+    vgsConfig.apiUrl, "POST",
+    `/agentic-tokens/${tokenId}/otp`,
+    req.body
+  );
+  res.status(status).json(data);
+}));
+
+// POST /api/agentic-enrollments?tokenId= — finish enrollment after ID&V
+app.post("/api/agentic-enrollments", handler(async (req, res) => {
+  const { tokenId } = req.query;
+  const { status, data } = await callVgs(
+    vgsConfig.apiUrl, "POST",
+    `/agentic-tokens/${tokenId}/agentic-enrollments`,
+    req.body
+  );
+  res.status(status).json(data);
+}));
+
 // POST /api/intents — create intent (Agentic API)
 app.post("/api/intents", handler(async (req, res) => {
   const { tokenId } = req.query;

@@ -14,8 +14,8 @@ export function Step({ stepKey, title, children, response }: StepProps) {
   const [collapsed, setCollapsed] = useState(false);
   const open = active && !collapsed;
 
-  // Steps that aren't part of the active flow (e.g. device binding on a
-  // Mastercard card) don't render at all.
+  // App.tsx only mounts the steps the active flow contains, so this is a backstop for a
+  // step component rendered directly (e.g. device binding on a Mastercard card).
   if (!inFlow) return null;
 
   function handleHeaderClick() {

@@ -10,18 +10,120 @@
 export type Network = "visa" | "mastercard";
 
 /** Stable identifier for each step, independent of its position in a flow. */
-export type StepKey = "card" | "enroll" | "deviceBinding" | "intent" | "cryptogram" | "confirm";
+export type StepKey =
+  | "card"
+  | "enroll"
+  | "deviceBinding"
+  | "idv"
+  | "agenticEnroll"
+  | "intent"
+  | "cryptogram"
+  | "confirm";
 
 /**
- * The ordered steps for each network's flow. The displayed step number and the
- * gating order are derived from these lists — Visa runs the full sequence, while
- * Mastercard SCOF skips device binding, intent, and confirmation (no device
- * binding, "verifiable intent" not yet enabled upstream, and SCOF checkout needs
- * no confirmation). See docs/temporary-mc-user-guide.md in the maranui repo.
+ * How the cardholder must be verified, straight from the enroll response's
+ * `data.attributes.cardholder_verification`. The server decides this from the vault's
+ * configuration, so the client never guesses or probes:
+ *
+ *  - "passkey" — FIDO passkey ceremony in a Visa iframe, driven by the VGS auth library
+ *    (`vgs-agentic-auth.js`). Produces `assurance_data` for intent creation. Visa may ask
+ *    for a one-time code first; that's reported per attempt on the device-attestation
+ *    response (`session.needsOtp`), not here.
+ *  - "otp"     — passkey-exempt cardholder ID&V: a one-time passcode driven
+ *    server-to-server, no iframe and no `assurance_data`. See `src/idv.ts`.
+ *  - "none"    — no cardholder verification step at all (Mastercard, Amex, and Visa
+ *    vaults that waive both the passkey and ID&V).
+ *
+ * Absent from an older response means "passkey" — the behaviour the API had before the
+ * field existed.
  */
-export const FLOWS: Record<Network, StepKey[]> = {
-  visa: ["card", "enroll", "deviceBinding", "intent", "cryptogram", "confirm"],
-  mastercard: ["card", "enroll", "cryptogram"],
+export type CardholderVerification = "passkey" | "otp" | "none";
+
+/** Assumed until the enroll response says otherwise (matches the API's own default). */
+export const DEFAULT_CARDHOLDER_VERIFICATION: CardholderVerification = "passkey";
+
+/**
+ * Read the two flow facts off an enroll response. Kept here, next to the types that declare
+ * them, so the field names and their defaults live in one place rather than in the component
+ * that happens to make the call. An unrecognised value falls back to the default.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function flowFromEnrollResponse(enrollResponse: any): {
+  verification: CardholderVerification;
+  agenticEnrollmentRequired: boolean;
+} {
+  const attrs = enrollResponse?.data?.attributes ?? {};
+  const reported = attrs.cardholder_verification;
+  const known: CardholderVerification[] = ["passkey", "otp", "none"];
+  return {
+    verification: known.includes(reported) ? reported : DEFAULT_CARDHOLDER_VERIFICATION,
+    agenticEnrollmentRequired: attrs.agentic_enrollment_required === true,
+  };
+}
+
+/**
+ * Which optional phases of the flow each network runs:
+ *  - `enrollment`   — the post-enroll cardholder-verification / complete-enrollment phase.
+ *  - `intent`       — spending intents (Mastercard's "verifiable intent" isn't enabled upstream yet).
+ *  - `confirmation` — reporting the outcome back (SCOF checkout needs none).
+ * See docs/temporary-mc-user-guide.md in the maranui repo for the Mastercard shape.
+ */
+const NETWORK_PHASES: Record<Network, { enrollment: boolean; intent: boolean; confirmation: boolean }> = {
+  visa: { enrollment: true, intent: true, confirmation: true },
+  mastercard: { enrollment: false, intent: false, confirmation: false },
+};
+
+/**
+ * The ordered steps of the active flow. The displayed step number and the gating order are
+ * derived from this list.
+ *
+ * Composed from the network's phases plus the two enroll-response fields rather than a fixed
+ * table, because they are independent facts: `cardholder_verification` decides *which*
+ * verification step runs (if any), and `agentic_enrollment_required` decides whether the extra
+ * enrollment call is needed. Every combination is therefore handled, including a Visa vault
+ * that waives verification entirely.
+ *
+ * `verification` is null until the enroll response reports it; the default applies until then.
+ */
+export function stepsFor(
+  network: Network,
+  verification: CardholderVerification | null,
+  agenticEnrollmentRequired: boolean,
+): StepKey[] {
+  const phases = NETWORK_PHASES[network];
+  const steps: StepKey[] = ["card", "enroll"];
+  if (phases.enrollment) {
+    const v = verification ?? DEFAULT_CARDHOLDER_VERIFICATION;
+    if (v === "passkey") steps.push("deviceBinding");
+    if (v === "otp") steps.push("idv");
+    if (agenticEnrollmentRequired) steps.push("agenticEnroll");
+  }
+  if (phases.intent) steps.push("intent");
+  steps.push("cryptogram");
+  if (phases.confirmation) steps.push("confirm");
+  return steps;
+}
+
+/** Labels and badge classes for the read-only flow indicator in the app header. */
+export const CARDHOLDER_VERIFICATION_META: Record<
+  CardholderVerification,
+  { label: string; badgeCss: string; hint: string }
+> = {
+  passkey: {
+    label: "Passkey (FIDO)",
+    badgeCss: "bg-blue-100 text-blue-800",
+    hint: "Device binding + passkey ceremony via the VGS auth library; produces assurance_data.",
+  },
+  otp: {
+    label: "One-time code (ID&V)",
+    badgeCss: "bg-purple-100 text-purple-800",
+    hint: "Passkey-exempt vault: OTP verification with no iframe, then a separate enrollment call. See src/idv.ts.",
+  },
+  none: {
+    label: "None",
+    badgeCss: "bg-green-100 text-green-800",
+    hint: "This vault requires no cardholder verification step.",
+  },
 };
 
 /**

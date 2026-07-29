@@ -28,6 +28,13 @@
   to     = "/.netlify/functions/agentic-tokens"
   status = 200
 
+# ID&V flow — the method-selection call carries the identifier in the path, so it needs an
+# explicit rule (the catch-all below would look for a function named "otp/<identifier>").
+[[redirects]]
+  from   = "/api/otp/*"
+  to     = "/.netlify/functions/otp"
+  status = 200
+
 # MCP bridge — the function reads the session id out of the path.
 [[redirects]]
   from   = "/api/sessions/*"
@@ -94,6 +101,9 @@
 #   /api/intents      → /.netlify/functions/intents
 #   /api/cryptograms  → /.netlify/functions/cryptograms
 #   /api/confirmations → /.netlify/functions/confirmations
+#   /api/step-up-options → /.netlify/functions/step-up-options
+#   /api/otp          → /.netlify/functions/otp
+#   /api/agentic-enrollments → /.netlify/functions/agentic-enrollments
 [[redirects]]
   from   = "/api/*"
   to     = "/.netlify/functions/:splat"

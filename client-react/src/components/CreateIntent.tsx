@@ -25,13 +25,15 @@ export function CreateIntent() {
     setLoading("intent", true);
     log(`Step ${num}: Creating intent...`);
     try {
+      // The ID&V flow produces no assurance_data — omit the field entirely rather than
+      // sending null. Under the passkey flow it carries the FIDO result.
       const assuranceData = state.assuranceData;
       const data = await api("POST", `/intents?tokenId=${encodeURIComponent(state.tokenId!)}`, {
         data: {
           type: "intents",
           attributes: {
             consumer_prompt: consumerPrompt,
-            assurance_data: assuranceData,
+            ...(assuranceData?.length ? { assurance_data: assuranceData } : {}),
             mandates: [{
               description: mandateDesc,
               merchant_category: "Electronics",
@@ -66,7 +68,7 @@ export function CreateIntent() {
 
   return (
     <Step stepKey="intent" title="Create Intent" response={response}>
-      <Field label="Assurance Data">
+      <Field label={assuranceJson ? "Assurance Data" : "Assurance Data (not used in this flow)"}>
         <textarea className="input min-h-[60px] resize-y" readOnly rows={3} value={assuranceJson} />
       </Field>
       <Field label="Consumer Prompt">
