@@ -21,17 +21,22 @@ export function CreateIntent() {
   });
   const [response, setResponse] = useState<unknown>(null);
 
+  // The flows without a passkey ceremony produce no assurance data — ID&V leaves it null and a
+  // passkey-exempt device binding resolves to []. Both mean "nothing to send", so normalise once
+  // and let the payload and the label below agree. Under the passkey flow it carries the FIDO result.
+  const assuranceData = state.assuranceData?.length ? state.assuranceData : null;
+  const assuranceJson = assuranceData ? JSON.stringify(assuranceData, null, 2) : "";
+
   async function handleCreate() {
     setLoading("intent", true);
     log(`Step ${num}: Creating intent...`);
     try {
-      const assuranceData = state.assuranceData;
       const data = await api("POST", `/intents?tokenId=${encodeURIComponent(state.tokenId!)}`, {
         data: {
           type: "intents",
           attributes: {
             consumer_prompt: consumerPrompt,
-            assurance_data: assuranceData,
+            ...(assuranceData ? { assurance_data: assuranceData } : {}),
             mandates: [{
               description: mandateDesc,
               merchant_category: "Electronics",
@@ -62,11 +67,9 @@ export function CreateIntent() {
     }
   }
 
-  const assuranceJson = state.assuranceData ? JSON.stringify(state.assuranceData, null, 2) : "";
-
   return (
     <Step stepKey="intent" title="Create Intent" response={response}>
-      <Field label="Assurance Data">
+      <Field label={assuranceData ? "Assurance Data" : "Assurance Data (not used in this flow)"}>
         <textarea className="input min-h-[60px] resize-y" readOnly rows={3} value={assuranceJson} />
       </Field>
       <Field label="Consumer Prompt">

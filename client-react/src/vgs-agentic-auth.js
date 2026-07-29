@@ -11,7 +11,14 @@
  *     await session.requestOtp(chosenMethod);
  *     await session.submitOtp("456789");
  *   }
+ *   if (session.needsPasskey) {
+ *     // reveal session.iframe for the passkey ceremony
+ *   }
  *   const assuranceData = await session.authenticate();
+ *
+ * The flow (OTP and/or passkey) is driven by the server: `needsOtp` and `needsPasskey`
+ * come from the device-attestation response. A passkey-exempt tenant reports
+ * `needsPasskey === false`; authenticate() then resolves without a passkey ceremony.
  *
  * @module vgs-agentic-auth
  */
@@ -51,6 +58,9 @@ const ENVIRONMENTS = {
 
 // const CLIENT_APP_ID = "VGSVicProvisionToken";
 const CLIENT_APP_ID = "VGS";
+
+// Sample-app only: the demo renders the Visa passkey prompt inline, so the iframe is
+// sized instead of hidden. The library ships it 0x0 and leaves sizing to the integrator.
 const VISA_IFRAME_WIDTH = "390";
 const VISA_IFRAME_HEIGHT = "400";
 
@@ -230,6 +240,12 @@ class Session {
     this._sessionClosed = false;
 
     const attrs = attestationResult.data.attributes;
+
+    // Server-driven flow selection: the attestation response tells us whether the
+    // passkey ceremony is required for this tenant. Defaults to true when the field is
+    // absent, so older backends and default tenants keep the full-FIDO behavior.
+    this.needsPasskey = attrs.passkey_required !== false;
+
     if (
       attrs.status === "CHALLENGE" &&
       Array.isArray(attrs.stepUpRequest)
@@ -246,7 +262,8 @@ class Session {
   }
 
   /**
-   * The library-managed hidden iframe element.
+   * The library-managed iframe element.
+   * Useful for showing/hiding during the FIDO ceremony (e.g. iframe.width = 300).
    * @type {HTMLIFrameElement}
    */
   get iframe() {
@@ -335,6 +352,16 @@ class Session {
    */
   async authenticate() {
     this._guardState(STATE_READY, "authenticate");
+
+    // Passkey-exempt tenants skip the FIDO ceremony entirely. The backend supplies the
+    // assuranceData waiver for these tenants, so we return an empty array — safe to send
+    // as-is. Calling authenticate() here stays valid so existing integrations that always
+    // call it keep working without code changes.
+    if (!this.needsPasskey) {
+      this._closeSession();
+      this._state = STATE_COMPLETE;
+      return [];
+    }
 
     if (!this._authContext) {
       throw new VgsAgenticAuthError(

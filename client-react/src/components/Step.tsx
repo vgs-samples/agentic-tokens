@@ -11,13 +11,9 @@ interface StepProps {
 
 export function Step({ stepKey, title, children, response, responseMeta }: StepProps) {
   const { goToStep } = useAppState();
-  const { active, done, loading, disabled, num, inFlow } = useStepStatus(stepKey);
+  const { active, done, loading, disabled, num } = useStepStatus(stepKey);
   const [collapsed, setCollapsed] = useState(false);
   const open = active && !collapsed;
-
-  // Steps that aren't part of the active flow (e.g. device binding on a
-  // Mastercard card) don't render at all.
-  if (!inFlow) return null;
 
   function handleHeaderClick() {
     if (active) {

@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useMemo,
   useRef,
   useState,
   type Dispatch,
@@ -9,9 +10,15 @@ import {
   type RefObject,
   type SetStateAction,
 } from "react";
-import { DEFAULT_NETWORK, FLOWS, type Network, type StepKey } from "./flow";
+import {
+  DEFAULT_NETWORK,
+  stepsFor,
+  type CardholderVerification,
+  type Network,
+  type StepKey,
+} from "./flow";
 
-export type { Network, StepKey } from "./flow";
+export type { CardholderVerification, Network, StepKey } from "./flow";
 
 export interface AppState {
   cardId: string | null;
@@ -20,6 +27,13 @@ export interface AppState {
   assuranceData: unknown[] | null;
   /** Resolved card network — drives which steps are shown. Defaults to visa. */
   network: Network;
+  /**
+   * The two flow facts reported by the enroll response, which decide the remaining steps.
+   * `cardholderVerification` is null until `setFlowFromEnrollment` reports the real value —
+   * `stepsFor` assumes the default in the meantime and the header says "determined at enrollment".
+   */
+  cardholderVerification: CardholderVerification | null;
+  agenticEnrollmentRequired: boolean;
   /** Which step is currently active */
   activeStep: StepKey;
   /** Steps that have been completed */
@@ -35,6 +49,8 @@ function initialState(): AppState {
     intentId: null,
     assuranceData: null,
     network: DEFAULT_NETWORK,
+    cardholderVerification: null,
+    agenticEnrollmentRequired: false,
     activeStep: "card",
     completedSteps: new Set(),
     loadingSteps: new Set(),
@@ -46,9 +62,12 @@ export type LogFn = (msg: string) => void;
 interface AppStateContextValue {
   state: AppState;
   setState: Dispatch<SetStateAction<AppState>>;
+  /** The ordered steps of the active flow — the single source of both order and numbering. */
+  flow: StepKey[];
   logs: string[];
   log: LogFn;
   setLoading: (step: StepKey, on: boolean) => void;
+  setFlowFromEnrollment: (verification: CardholderVerification, agenticEnrollmentRequired: boolean) => void;
   completeStep: (step: StepKey) => void;
   goToStep: (step: StepKey) => void;
   reset: () => void;
@@ -82,7 +101,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       completed.add(step);
       const loading = new Set(s.loadingSteps);
       loading.delete(step);
-      const flow = FLOWS[s.network];
+      const flow = stepsFor(s.network, s.cardholderVerification, s.agenticEnrollmentRequired);
       const idx = flow.indexOf(step);
       // Advance to the next step in the active flow; stay put on the last step.
       const next = idx >= 0 && idx + 1 < flow.length ? flow[idx + 1] : step;
@@ -95,6 +114,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // Applying the enroll response can swap the step list (e.g. device binding gives way to
+  // ID&V). Only the facts are stored here; the caller's following completeStep("enroll") is
+  // what advances activeStep, and it recomputes the flow from these new values.
+  const setFlowFromEnrollment = useCallback(
+    (verification: CardholderVerification, agenticEnrollmentRequired: boolean) => {
+      setState((s) => ({ ...s, cardholderVerification: verification, agenticEnrollmentRequired }));
+    },
+    [],
+  );
+
   const goToStep = useCallback((step: StepKey) => {
     setState((s) => (s.activeStep === step ? s : { ...s, activeStep: step }));
   }, []);
@@ -104,13 +133,32 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     const session = sessionRef.current as any;
     if (session?.destroy) session.destroy();
     sessionRef.current = null;
+    // The flow comes from the next enroll response, so drop back to the assumed default.
     setState(initialState());
     setLogs([]);
   }, []);
 
+  // Recomputed only when one of the three flow facts changes, not on every log line.
+  const flow = useMemo(
+    () => stepsFor(state.network, state.cardholderVerification, state.agenticEnrollmentRequired),
+    [state.network, state.cardholderVerification, state.agenticEnrollmentRequired],
+  );
+
   return (
     <AppStateContext.Provider
-      value={{ state, setState, logs, log, setLoading, completeStep, goToStep, reset, sessionRef }}
+      value={{
+        state,
+        setState,
+        flow,
+        logs,
+        log,
+        setLoading,
+        setFlowFromEnrollment,
+        completeStep,
+        goToStep,
+        reset,
+        sessionRef,
+      }}
     >
       {children}
     </AppStateContext.Provider>
@@ -126,17 +174,15 @@ export function useAppState(): AppStateContextValue {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function useStepStatus(step: StepKey) {
-  const { state } = useAppState();
-  const flow = FLOWS[state.network];
+  const { state, flow } = useAppState();
   const stepIdx = flow.indexOf(step);
   const activeIdx = flow.indexOf(state.activeStep);
   const done = state.completedSteps.has(step);
   const loading = state.loadingSteps.has(step);
   const active = state.activeStep === step;
-  // A step is disabled if it isn't part of the active flow, or it's still ahead
-  // of the active step (and not already completed).
-  const disabled = !done && (stepIdx === -1 || activeIdx < stepIdx);
-  // 1-based display number within the active flow (0 if not part of it).
-  const num = stepIdx === -1 ? 0 : stepIdx + 1;
-  return { active, done, loading, disabled, num, inFlow: stepIdx !== -1 };
+  // A step is disabled while it's still ahead of the active step (and not already completed).
+  const disabled = !done && activeIdx < stepIdx;
+  // 1-based display number within the active flow.
+  const num = stepIdx + 1;
+  return { active, done, loading, disabled, num };
 }

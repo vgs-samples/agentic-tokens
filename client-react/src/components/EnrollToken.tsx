@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { apiResponse } from "../api";
 import { useAppState, useStepStatus } from "../useAppState";
-import { reconcileNetwork } from "../flow";
+import { flowFromEnrollResponse, reconcileNetwork } from "../flow";
 import { Step } from "./Step";
 import { Field, Button } from "./ui";
 
@@ -19,7 +19,7 @@ interface EnrollApiBody {
 }
 
 export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
-  const { state, setState, log, setLoading, completeStep } = useAppState();
+  const { state, setState, log, setLoading, setFlowFromEnrollment, completeStep } = useAppState();
   const { loading, num } = useStepStatus("enroll");
   const [response, setResponse] = useState<unknown>(null);
   const [responseMeta, setResponseMeta] = useState<string | null>(null);
@@ -45,6 +45,15 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
         const network = reconcileNetwork(data, state.network);
         setState((s) => ({ ...s, tokenId, network }));
         log(`Step ${num}: Token enrolled — ${tokenId} (${network})`);
+
+        // The server tells us which flow this vault uses; the remaining steps follow from
+        // these two fields (see flowFromEnrollResponse for the field names and defaults).
+        const { verification, agenticEnrollmentRequired } = flowFromEnrollResponse(data);
+        log(
+          `Step ${num}: cardholder_verification=${verification} ` +
+            `agentic_enrollment_required=${agenticEnrollmentRequired}`,
+        );
+        setFlowFromEnrollment(verification, agenticEnrollmentRequired);
         completeStep("enroll");
       } else {
         log(`Step ${num}: API returned HTTP ${result.status} — ${data?.error ?? JSON.stringify(data)}`);

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchAccessToken } from "../api";
 import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
@@ -27,6 +27,18 @@ export function DeviceBinding({ consumerEmail }: Props) {
   const [sessionStarted, setSessionStarted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // This step now unmounts when the enroll response swaps the flow (device binding gives way to
+  // ID&V, or to nothing at all). A session started before that swap has to be closed here —
+  // handleAuthenticate and reset() are the only other places that destroy one.
+  useEffect(
+    () => () => {
+      const session = sessionRef.current as { destroy?: () => void } | null;
+      session?.destroy?.();
+      sessionRef.current = null;
+    },
+    [sessionRef],
+  );
+
   async function handleStartSession() {
     setLoading("deviceBinding", true);
     setSessionStarted(true);
@@ -52,7 +64,14 @@ export function DeviceBinding({ consumerEmail }: Props) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const session: any = await flow.startSession(containerRef.current);
       sessionRef.current = session;
-      log(`Step ${num}: Session created. needsOtp=` + session.needsOtp);
+      log(`Step ${num}: Session created. needsOtp=${session.needsOtp} needsPasskey=${session.needsPasskey}`);
+
+      // The only place iframe visibility is decided. The sample-only sizing in
+      // vgs-agentic-auth.js renders it inline; a passkey-exempt vault runs no ceremony, so
+      // there is nothing for the cardholder to see.
+      if (session.needsPasskey === false) {
+        session.iframe.style.display = "none";
+      }
 
       if (session.needsOtp) {
         setOtpMethods(session.otpMethods);
@@ -113,22 +132,18 @@ export function DeviceBinding({ consumerEmail }: Props) {
     }
   }
 
-  function handleSkip() {
-    log(`Step ${num}: Skipped — passkey-exempt tenant; backend synthesizes the assurance waiver`);
-    const session = sessionRef.current as { destroy?: () => void } | null;
-    if (session?.destroy) session.destroy();
-    sessionRef.current = null;
-    setState((s) => ({ ...s, assuranceData: null }));
-    setResponse({ skipped: true, note: "Device binding bypassed (passkey-exempt)" });
-    completeStep("deviceBinding");
-  }
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async function handleAuthenticate(sessionArg?: any) {
     setLoading("deviceBinding", true);
-    log(`Step ${num}: Running FIDO ceremony...`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const session = sessionArg ?? (sessionRef.current as any);
+    // Passkey-exempt: authenticate() resolves immediately without a ceremony and the backend
+    // synthesizes the assuranceData waiver, so there is nothing to do but say so.
+    log(
+      session.needsPasskey === false
+        ? `Step ${num}: Passkey exempt — skipping passkey ceremony (backend synthesizes the waiver)`
+        : `Step ${num}: Running FIDO ceremony...`,
+    );
     try {
       const assuranceData = await session.authenticate();
       session.destroy();
@@ -176,13 +191,11 @@ export function DeviceBinding({ consumerEmail }: Props) {
       <Field label="Merchant Name (optional)">
         <input className="input" placeholder="e.g. Best Buy" value={merchantName} onChange={(e) => setMerchantName(e.target.value)} />
       </Field>
-      <div className="flex gap-2">
-        <Button onClick={handleStartSession} disabled={sessionStarted || loading}>Start Session</Button>
-        <Button onClick={handleSkip} disabled={loading} variant="secondary">Skip — passkey-exempt only</Button>
-      </div>
+      <Button onClick={handleStartSession} disabled={sessionStarted || loading}>Start Session</Button>
       <p className="text-xs text-gray-500 mt-1">
-        Skip only if your tenant is configured with <code>visa_fido_mode: passkey_exempt</code> on the backend.
-        Otherwise device binding is required and the intent will be rejected.
+        The library reads <code>needsOtp</code> / <code>needsPasskey</code> from the device-attestation
+        response, so the server decides which prompts run. Vaults that verify with a one-time code
+        instead of a passkey use the <strong>Cardholder ID&amp;V</strong> mode in the header.
       </p>
 
       {otpVisible && (
