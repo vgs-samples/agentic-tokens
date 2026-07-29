@@ -54,9 +54,12 @@ export function flowFromEnrollResponse(enrollResponse: any): {
 } {
   const attrs = enrollResponse?.data?.attributes ?? {};
   const reported = attrs.cardholder_verification;
-  const known: CardholderVerification[] = ["passkey", "otp", "none"];
   return {
-    verification: known.includes(reported) ? reported : DEFAULT_CARDHOLDER_VERIFICATION,
+    // Validated against the meta table below rather than a hand-written list, so a new
+    // verification mode is a compile error in one place instead of silently falling back here.
+    verification: Object.hasOwn(CARDHOLDER_VERIFICATION_META, reported ?? "")
+      ? reported
+      : DEFAULT_CARDHOLDER_VERIFICATION,
     agenticEnrollmentRequired: attrs.agentic_enrollment_required === true,
   };
 }

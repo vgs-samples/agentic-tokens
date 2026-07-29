@@ -11,13 +11,9 @@ interface StepProps {
 
 export function Step({ stepKey, title, children, response, responseMeta }: StepProps) {
   const { goToStep } = useAppState();
-  const { active, done, loading, disabled, num, inFlow } = useStepStatus(stepKey);
+  const { active, done, loading, disabled, num } = useStepStatus(stepKey);
   const [collapsed, setCollapsed] = useState(false);
   const open = active && !collapsed;
-
-  // App.tsx only mounts the steps the active flow contains, so this is a backstop for a
-  // step component rendered directly (e.g. device binding on a Mastercard card).
-  if (!inFlow) return null;
 
   function handleHeaderClick() {
     if (active) {

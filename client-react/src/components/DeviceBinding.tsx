@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchAccessToken } from "../api";
 import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
@@ -26,6 +26,18 @@ export function DeviceBinding({ consumerEmail }: Props) {
   const [otpDelivered, setOtpDelivered] = useState(false);
   const [sessionStarted, setSessionStarted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // This step now unmounts when the enroll response swaps the flow (device binding gives way to
+  // ID&V, or to nothing at all). A session started before that swap has to be closed here —
+  // handleAuthenticate and reset() are the only other places that destroy one.
+  useEffect(
+    () => () => {
+      const session = sessionRef.current as { destroy?: () => void } | null;
+      session?.destroy?.();
+      sessionRef.current = null;
+    },
+    [sessionRef],
+  );
 
   async function handleStartSession() {
     setLoading("deviceBinding", true);

@@ -138,8 +138,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setLogs([]);
   }, []);
 
-  // Recomputed only when a flow fact changes, so the array is identity-stable across the
-  // renders driven by logging and form input.
+  // Recomputed only when one of the three flow facts changes, not on every log line.
   const flow = useMemo(
     () => stepsFor(state.network, state.cardholderVerification, state.agenticEnrollmentRequired),
     [state.network, state.cardholderVerification, state.agenticEnrollmentRequired],
@@ -181,10 +180,9 @@ export function useStepStatus(step: StepKey) {
   const done = state.completedSteps.has(step);
   const loading = state.loadingSteps.has(step);
   const active = state.activeStep === step;
-  // A step is disabled if it isn't part of the active flow, or it's still ahead
-  // of the active step (and not already completed).
-  const disabled = !done && (stepIdx === -1 || activeIdx < stepIdx);
-  // 1-based display number within the active flow (0 if not part of it).
-  const num = stepIdx === -1 ? 0 : stepIdx + 1;
-  return { active, done, loading, disabled, num, inFlow: stepIdx !== -1 };
+  // A step is disabled while it's still ahead of the active step (and not already completed).
+  const disabled = !done && activeIdx < stepIdx;
+  // 1-based display number within the active flow.
+  const num = stepIdx + 1;
+  return { active, done, loading, disabled, num };
 }
