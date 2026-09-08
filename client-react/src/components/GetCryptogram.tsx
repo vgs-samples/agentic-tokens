@@ -6,16 +6,16 @@ import { Step } from "./Step";
 import { Field, Row, Button } from "./ui";
 
 const CURRENCY_CODES = [
-  { value: "840", label: "840 - USD" },
-  { value: "978", label: "978 - EUR" },
-  { value: "826", label: "826 - GBP" },
-  { value: "392", label: "392 - JPY" },
-  { value: "036", label: "036 - AUD" },
-  { value: "124", label: "124 - CAD" },
+  { value: "840", alpha: "USD", label: "840 - USD" },
+  { value: "978", alpha: "EUR", label: "978 - EUR" },
+  { value: "826", alpha: "GBP", label: "826 - GBP" },
+  { value: "392", alpha: "JPY", label: "392 - JPY" },
+  { value: "036", alpha: "AUD", label: "036 - AUD" },
+  { value: "124", alpha: "CAD", label: "124 - CAD" },
 ] as const;
 
 export function GetCryptogram() {
-  const { state, log, setLoading, completeStep } = useAppState();
+  const { state, setState, log, setLoading, completeStep } = useAppState();
   const { loading, num } = useStepStatus("cryptogram");
   // Branch on the cryptogram *style*, not the network name, so a new network
   // maps onto an existing flavour (intent-scoped vs SCOF checkout) by config.
@@ -38,9 +38,17 @@ export function GetCryptogram() {
   const [cardScopedAmount, setCardScopedAmount] = useState("5.33");
   const [cardScopedCurrency, setCardScopedCurrency] = useState("840");
   const [cardScopedMerchant, setCardScopedMerchant] = useState("Best Buy");
+  const [amexItemName, setAmexItemName] = useState("Demo item");
 
   const [response, setResponse] = useState<unknown>(null);
   const [finalResult, setFinalResult] = useState<unknown>(null);
+  const resumedCredential = state.cryptogramResponse as {
+    data?: { attributes?: { cryptogram?: unknown } };
+  } | null;
+  const displayedResponse = resumedCredential ?? response;
+  const displayedFinalResult = resumedCredential?.data?.attributes?.cryptogram
+    ? resumedCredential.data.attributes
+    : finalResult;
 
   async function handleGet() {
     setLoading("cryptogram", true);
@@ -57,6 +65,19 @@ export function GetCryptogram() {
             transaction_amount: cardScopedAmount,
             transaction_currency_code: cardScopedCurrency,
             merchant_name: cardScopedMerchant,
+            ...(isAmex
+              ? {
+                  items: [
+                    {
+                      item_id: "demo-item-001",
+                      name: amexItemName,
+                      unit_amount: cardScopedAmount,
+                      currency: CURRENCY_CODES.find(({ value }) => value === cardScopedCurrency)?.alpha ?? "USD",
+                      quantity: 1,
+                    },
+                  ],
+                }
+              : {}),
           }
         : {
             transaction_data: [{
@@ -74,9 +95,36 @@ export function GetCryptogram() {
         data: { type: "cryptograms", attributes },
       });
       setResponse(data);
-      if (data?.data?.id) {
+      const credentialAttributes = data?.data?.attributes;
+      if (
+        credentialAttributes?.status === "PENDING"
+        && credentialAttributes?.cardholder_verification === "otp"
+        && typeof credentialAttributes?.client_ref_id === "string"
+        && Array.isArray(credentialAttributes?.stepUpRequest)
+        && credentialAttributes.stepUpRequest.length > 0
+      ) {
+        setState((s) => {
+          const completedSteps = new Set(s.completedSteps);
+          completedSteps.delete("cryptogram");
+          completedSteps.delete("credentialOtp");
+          const loadingSteps = new Set(s.loadingSteps);
+          loadingSteps.delete("cryptogram");
+          return {
+            ...s,
+            credentialOtpContext: {
+              clientRefId: credentialAttributes.client_ref_id,
+              methods: credentialAttributes.stepUpRequest,
+            },
+            cryptogramResponse: null,
+            completedSteps,
+            loadingSteps,
+            activeStep: "credentialOtp",
+          };
+        });
+        log(`Step ${num}: Payment credential requires OTP verification`);
+      } else if (data?.data?.id && credentialAttributes?.cryptogram) {
         log(`Step ${num}: Cryptogram received`);
-        setFinalResult(data.data.attributes);
+        setFinalResult(credentialAttributes);
         completeStep("cryptogram");
       } else {
         log(`Step ${num}: Failed — ` + JSON.stringify(data));
@@ -96,7 +144,7 @@ export function GetCryptogram() {
 
   return (
     <>
-      <Step stepKey="cryptogram" title={title} response={response}>
+      <Step stepKey="cryptogram" title={title} response={displayedResponse}>
         {isCardScoped ? (
           <>
             <Field label={isAmex ? "Enrollment ID" : "Token ID"}>
@@ -117,6 +165,11 @@ export function GetCryptogram() {
             <Field label="Merchant Name">
               <input className="input" value={cardScopedMerchant} onChange={(e) => setCardScopedMerchant(e.target.value)} />
             </Field>
+            {isAmex && (
+              <Field label="Item Name">
+                <input className="input" value={amexItemName} onChange={(e) => setAmexItemName(e.target.value)} />
+              </Field>
+            )}
             <p className="text-xs text-gray-500 mt-1">
               {isAmex ? "Amex ACE" : "SCOF checkout"} runs directly against the enrolled card — no intent binding.
             </p>
@@ -152,11 +205,11 @@ export function GetCryptogram() {
         </Button>
       </Step>
 
-      {finalResult && (
+      {displayedFinalResult && (
         <div className="bg-green-50 border-2 border-green-500 rounded-lg p-4 mt-4">
           <h2 className="text-base font-semibold mb-2">Payment Credential</h2>
           <pre className="bg-[#1e1e1e] text-[#d4d4d4] p-3 rounded text-sm whitespace-pre-wrap break-all">
-            {JSON.stringify(finalResult, null, 2)}
+            {JSON.stringify(displayedFinalResult, null, 2)}
           </pre>
         </div>
       )}

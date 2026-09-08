@@ -35,7 +35,20 @@ function AppContent() {
     card: <CreateCard />,
     enroll: <EnrollToken consumerEmail={consumerEmail} setConsumerEmail={setConsumerEmail} />,
     deviceBinding: <DeviceBinding consumerEmail={consumerEmail} />,
-    idv: <CardholderIdv consumerEmail={consumerEmail} />,
+    idv: (
+      <CardholderIdv
+        key={state.otpContext?.clientRefId ?? "visa"}
+        consumerEmail={consumerEmail}
+        purpose="enrollment"
+      />
+    ),
+    credentialOtp: (
+      <CardholderIdv
+        key={state.credentialOtpContext?.clientRefId ?? "credential"}
+        consumerEmail={consumerEmail}
+        purpose="credential"
+      />
+    ),
     agenticEnroll: <CompleteEnrollment consumerEmail={consumerEmail} />,
     intent: <CreateIntent />,
     cryptogram: <GetCryptogram />,
