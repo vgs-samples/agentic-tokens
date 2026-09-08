@@ -13,6 +13,10 @@ interface Props {
 interface EnrollApiBody {
   data?: {
     id?: string;
+    attributes?: {
+      client_ref_id?: string;
+      stepUpRequest?: Array<{ method: string; identifier: string; value?: string }>;
+    };
   };
   error?: string;
   detail?: string;
@@ -43,7 +47,14 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
         // it, in case PAN-based detection at card creation guessed wrong. The
         // network-specific markers live in reconcileNetwork (see flow.ts).
         const network = reconcileNetwork(data, state.network);
-        setState((s) => ({ ...s, tokenId, network }));
+        const attributes = data.data?.attributes;
+        const otpContext = attributes?.client_ref_id && attributes.stepUpRequest?.length
+          ? {
+              clientRefId: attributes.client_ref_id,
+              methods: attributes.stepUpRequest,
+            }
+          : null;
+        setState((s) => ({ ...s, tokenId, network, otpContext }));
         log(`Step ${num}: Token enrolled — ${tokenId} (${network})`);
 
         // The server tells us which flow this vault uses; the remaining steps follow from
