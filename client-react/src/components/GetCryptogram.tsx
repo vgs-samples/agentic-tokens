@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api } from "../api";
+import { apiResponse } from "../api";
 import { useAppState, useStepStatus } from "../useAppState";
 import { CRYPTOGRAM_STYLE } from "../flow";
 import { Step } from "./Step";
@@ -15,7 +15,7 @@ const CURRENCY_CODES = [
 ] as const;
 
 export function GetCryptogram() {
-  const { state, log, setLoading, completeStep } = useAppState();
+  const { state, setState, log, setLoading, completeStep } = useAppState();
   const { loading, num } = useStepStatus("cryptogram");
   // Branch on the cryptogram *style*, not the network name, so a new network
   // maps onto an existing flavour (intent-scoped vs SCOF checkout) by config.
@@ -40,17 +40,38 @@ export function GetCryptogram() {
   const [cardScopedMerchant, setCardScopedMerchant] = useState("Best Buy");
 
   const [response, setResponse] = useState<unknown>(null);
-  const [finalResult, setFinalResult] = useState<unknown>(null);
+  const [responseMeta, setResponseMeta] = useState<string | null>(null);
+  const [action, setAction] = useState<"get" | "delete" | null>(null);
+  const [deletedId, setDeletedId] = useState<string | null>(null);
+  const [finalResult, setFinalResult] = useState<{ scope: string; attributes: unknown } | null>(null);
+  const tokenId = state.tokenId?.trim() ?? "";
+  const resultScope = `${state.network}/${state.cardId}/${tokenId}`;
+
+  function handleTokenIdChange(value: string) {
+    setResponse(null);
+    setResponseMeta(null);
+    setFinalResult(null);
+    setDeletedId(null);
+    setState((s) => {
+      const completedSteps = new Set(s.completedSteps);
+      completedSteps.delete("cryptogram");
+      return { ...s, tokenId: value, completedSteps };
+    });
+  }
 
   async function handleGet() {
+    if (loading || !tokenId || (isCardScoped ? !state.cardId?.trim() : !state.intentId?.trim())) return;
+    setAction("get");
+    setDeletedId(null);
+    setFinalResult(null);
     setLoading("cryptogram", true);
     log(`Step ${num}: Getting cryptogram...`);
     try {
       // SCOF checkout is card-scoped with no intent; intent-style is
       // intent-scoped with a transaction-data cart.
       const query = isCardScoped
-          ? `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&cardId=${encodeURIComponent(state.cardId!)}`
-          : `/cryptograms?tokenId=${encodeURIComponent(state.tokenId!)}&intentId=${encodeURIComponent(state.intentId!)}`;
+          ? `/cryptograms?tokenId=${encodeURIComponent(tokenId)}&cardId=${encodeURIComponent(state.cardId!)}`
+          : `/cryptograms?tokenId=${encodeURIComponent(tokenId)}&intentId=${encodeURIComponent(state.intentId!)}`;
 
       const attributes = isCardScoped
         ? {
@@ -70,13 +91,15 @@ export function GetCryptogram() {
             }],
           };
 
-      const data = await api("POST", query, {
+      const result = await apiResponse<{ data?: { id?: string; attributes?: unknown } }>("POST", query, {
         data: { type: "cryptograms", attributes },
       });
+      const data = result.body;
       setResponse(data);
-      if (data?.data?.id) {
+      setResponseMeta(`Get credential · HTTP ${result.status}`);
+      if (result.ok && data?.data?.id) {
         log(`Step ${num}: Cryptogram received`);
-        setFinalResult(data.data.attributes);
+        setFinalResult({ scope: resultScope, attributes: data.data.attributes });
         completeStep("cryptogram");
       } else {
         log(`Step ${num}: Failed — ` + JSON.stringify(data));
@@ -84,24 +107,77 @@ export function GetCryptogram() {
       }
     } catch (err) {
       log(`Step ${num}: Error — ` + (err as Error).message);
+      setResponse({ error: "client_error", detail: (err as Error).message });
+      setResponseMeta("Get credential · Client error");
+    } finally {
       setLoading("cryptogram", false);
+      setAction(null);
+    }
+  }
+
+  async function handleDelete() {
+    if (loading || !tokenId || !isCardScoped) return;
+    setAction("delete");
+    setDeletedId(null);
+    setLoading("cryptogram", true);
+    log(`Step ${num}: Deleting ${state.network} enrollment — ${tokenId}`);
+    try {
+      const query = new URLSearchParams({ tokenId, network: state.network });
+      const result = await apiResponse<{ data?: { id?: string; attributes?: { status?: string } } }>(
+        "DELETE", `/token-deletion?${query}`,
+      );
+      setResponse(result.body);
+      setResponseMeta(`Delete enrollment · HTTP ${result.status}`);
+      if (result.ok && result.body?.data?.attributes?.status === "deleted") {
+        setDeletedId(tokenId);
+        setFinalResult(null);
+        setState((s) => {
+          const completedSteps = new Set(s.completedSteps);
+          completedSteps.delete("enroll");
+          completedSteps.delete("cryptogram");
+          return { ...s, tokenId: null, completedSteps };
+        });
+        log(`Step ${num}: Enrollment deleted — ${tokenId}`);
+      } else {
+        log(`Step ${num}: Deletion failed — HTTP ${result.status}`);
+      }
+    } catch (err) {
+      setResponse({ error: "client_error", detail: (err as Error).message });
+      setResponseMeta("Delete enrollment · Client error");
+      log(`Step ${num}: Deletion error — ${(err as Error).message}`);
+    } finally {
+      setLoading("cryptogram", false);
+      setAction(null);
     }
   }
 
   const title = isAmex
-    ? "Get Payment Credential (Amex ACE)"
+    ? "Manage Enrollment — Amex ACE"
     : isScof
-      ? "Checkout — Get Cryptogram (SCOF)"
+      ? "Manage Token — Mastercard SCOF"
       : "Get Payment Cryptogram";
 
   return (
     <>
-      <Step stepKey="cryptogram" title={title} response={response}>
+      <Step stepKey="cryptogram" title={title} response={response} responseMeta={responseMeta}>
         {isCardScoped ? (
           <>
             <Field label={isAmex ? "Enrollment ID" : "Token ID"}>
-              <input className="input" readOnly value={state.tokenId ?? ""} />
+              <input
+                className="input"
+                aria-label={isAmex ? "Enrollment ID" : "Token ID"}
+                value={state.tokenId ?? ""}
+                onChange={(e) => handleTokenIdChange(e.target.value)}
+                disabled={loading}
+                placeholder="Paste an existing ID or use the enrollment response"
+              />
             </Field>
+            <p className="text-xs text-gray-500">Get a payment credential or delete the enrollment using this ID.</p>
+            {deletedId && !tokenId && (
+              <p role="status" className="text-sm text-green-700">
+                Enrollment {deletedId} deleted. Enroll again or enter another ID.
+              </p>
+            )}
             <Row>
               <Field label="Transaction Amount">
                 <input className="input" value={cardScopedAmount} onChange={(e) => setCardScopedAmount(e.target.value)} />
@@ -147,16 +223,23 @@ export function GetCryptogram() {
             </Field>
           </>
         )}
-        <Button onClick={handleGet} disabled={loading}>
-          {isAmex ? "Get Credential" : isScof ? "Checkout" : "Get Cryptogram"}
-        </Button>
+        <div className="flex flex-wrap gap-3">
+          <Button onClick={handleGet} disabled={loading || !tokenId || (isCardScoped ? !state.cardId?.trim() : !state.intentId?.trim())}>
+            {action === "get" ? "Getting credential..." : isAmex ? "Get Credential" : isScof ? "Checkout" : "Get Cryptogram"}
+          </Button>
+          {isCardScoped && (
+            <Button onClick={handleDelete} disabled={loading || !tokenId} variant="danger">
+              {action === "delete" ? "Deleting..." : "Delete Enrollment"}
+            </Button>
+          )}
+        </div>
       </Step>
 
-      {finalResult && (
+      {finalResult && finalResult.scope === resultScope && (
         <div className="bg-green-50 border-2 border-green-500 rounded-lg p-4 mt-4">
           <h2 className="text-base font-semibold mb-2">Payment Credential</h2>
           <pre className="bg-[#1e1e1e] text-[#d4d4d4] p-3 rounded text-sm whitespace-pre-wrap break-all">
-            {JSON.stringify(finalResult, null, 2)}
+            {JSON.stringify(finalResult.attributes, null, 2)}
           </pre>
         </div>
       )}

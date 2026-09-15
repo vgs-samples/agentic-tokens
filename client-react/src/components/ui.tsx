@@ -22,10 +22,12 @@ export function Button({
   onClick: () => void;
   disabled?: boolean;
   children: ReactNode;
-  variant?: "primary" | "secondary";
+  variant?: "primary" | "secondary" | "danger";
 }) {
   const styles =
-    variant === "secondary"
+    variant === "danger"
+      ? "bg-red-600 text-white hover:bg-red-700 disabled:bg-red-300"
+      : variant === "secondary"
       ? "bg-gray-500 text-white hover:bg-gray-600 disabled:bg-gray-300"
       : "bg-blue-500 text-white hover:bg-blue-600 disabled:bg-blue-300";
   return (
