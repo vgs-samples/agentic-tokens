@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A reference/demo app for the VGS Agentic Tokens API. Sandbox only. It supports three card-network flows, with the UI adapting to whichever network the card resolves to:
+A reference/demo app for the VGS Agentic Tokens API. Runtime environment and upstream URLs come from server configuration (`VGS_VAULT_ENV` and VGS URL variables). It supports three card-network flows, with the UI adapting to whichever network the card resolves to:
 
 - **Visa** (full flow): Create Card → Enroll Token → Device Binding (FIDO/OTP) → Create Intent → Get Cryptogram → Confirm Transaction.
-- **Mastercard** (SCOF / Agent Pay): Create Card → Enroll Token → Get Cryptogram (checkout). No device binding, no intent ("verifiable intent" not yet enabled upstream), no confirmation.
-- **Amex** (ACE / Agentic Commerce): Create Card → Enroll Token → Get Payment Credential. No device binding, no intent, no confirmation.
+- **Mastercard** (SCOF / Agent Pay): Create Card → Enroll Token → Manage Token (checkout or delete enrollment). No device binding, no intent ("verifiable intent" not yet enabled upstream), no confirmation.
+- **Amex** (ACE / Agentic Commerce): Create Card → Enroll Token → Manage Enrollment (get payment credential or delete enrollment). No device binding, no intent, no confirmation.
 
 **Cardholder verification is discovered from the API, never configured here.** The enroll response
 carries `data.attributes.cardholder_verification` (`passkey` / `otp` / `none`) and
@@ -24,7 +24,7 @@ a flow switch, and do not probe an endpoint to guess the flow.
   and no `assurance_data`. Flow: Create Card → Enroll Token → Cardholder Verification →
   [Complete Enrollment] → Create Intent → Get Cryptogram → Confirm Transaction, where the
   bracketed step appears only when `agentic_enrollment_required` is true.
-- **`none`** — no verification step; enrollment goes straight to intent creation.
+- **`none`** — no verification step; Visa proceeds to intent creation, while Mastercard/Amex proceed to credential retrieval or deletion.
 
 `agentic_enrollment_required` is independent of the verification value: it alone decides whether the
 **Complete Enrollment** step appears (Visa requires that call *after* verification, before any intent).
@@ -64,6 +64,8 @@ Three Docker services behind a shared compose network:
 
 The frontend uses same-origin relative URLs (`/api/*`) — all traffic flows through Caddy, no CORS needed.
 
+Netlify deployments use `netlify/functions/` with the same `server/vgs.js` client and deletion helper. Update both server surfaces for demo API changes.
+
 ## Directory Layout
 
 - `client-react/` — React + Vite + Tailwind frontend (TypeScript). Per-step components in `src/components/`.
@@ -76,7 +78,7 @@ All routes proxy to VGS APIs with a Bearer token. The two base URLs are `VGS_API
 | Route | VGS API |
 |---|---|
 | `GET /api/token` | Returns access token for browser SDK |
-| `POST /api/cards` | CMP — create test card |
+| `GET /api/config` | Runtime vault/environment and Collect.js URL; card creation happens in browser Collect.js |
 | `POST /api/cards/:cardId/agentic-tokens` | Enroll card for agentic payments |
 | `GET /api/step-up-options?tokenId=&clientRefId=` | ID&V — cardholder verification options (`clientRefId` required, URL-safe) |
 | `POST /api/otp/:identifier?tokenId=` | ID&V — deliver the one-time code via the chosen method |
@@ -87,6 +89,18 @@ All routes proxy to VGS APIs with a Bearer token. The two base URLs are `VGS_API
 | `DELETE /api/intents?tokenId=&intentId=` | Cancel intent |
 | `POST /api/cryptograms?tokenId=&intentId=` | Visa — get DPAN + cryptogram (intent-scoped) |
 | `POST /api/cryptograms?tokenId=&cardId=` | Mastercard/Amex — card-scoped credential (no intent) |
+| `DELETE /api/token-deletion?network=&tokenId=` | Amex/Mastercard — bodyless `DELETE /temporary/{network}/agentic-tokens/{id}` |
+
+## Enrollment management
+
+`GetCryptogram.tsx` renders the shared management step for Amex and Mastercard. Its Enrollment ID / Token ID input edits the shared `state.tokenId`; both operations use the trimmed current value. The incoming enrollment response pre-populates it from `data.id`. For Amex this is the ACE `enrollmentId`, and for Mastercard it is `srcDigitalCardId`.
+
+- Credential retrieval also needs `cardId` and uses the card-scoped cryptogram endpoint.
+- Deletion requires only `tokenId` and `network`; it must not depend on a successful cryptogram first. It sends DELETE without a body through `server/token-deletion.js`, shared by Express and `netlify/functions/token-deletion.js`. Allow only `amex` and `mastercard`, and encode the ID as one upstream path segment.
+- Check HTTP success and `data.attributes.status=deleted` before clearing the ID, completed enrollment/cryptogram state, and displayed credential. Preserve the ID when deletion fails. Editing the ID clears the previous credential display; disable both actions and the input during a request.
+- Amex deletion represents a user-requested removal: the service supplies `initiator=USER` and `reasonCode=USER_REQUESTED`. Both providers return the shared `CardDeletionResponse`.
+- Keep Docker’s explicit server file COPY and Netlify functions in sync when adding shared proxy modules. The existing `/api/*` redirect serves the token-deletion function.
+- Run `node --test server/token-deletion.test.js` from the repo root, plus the React build and lint. Browser checks must use mocked deletion responses unless actual removal is explicitly requested.
 
 ## Key Details
 

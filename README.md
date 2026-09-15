@@ -55,6 +55,16 @@ Both flows above are Visa. Mastercard runs Create Card → Enroll Token → Chec
 
 Each step auto-populates IDs into the next step.
 
+For Amex and Mastercard, the step after enrollment offers **Get Credential / Checkout**
+and **Delete Enrollment**. The Enrollment ID / Token ID field is editable: paste an
+existing ID to use either operation. Getting a credential also requires the Card ID;
+deleting requires only the enrollment/token ID. After successful deletion, the demo
+clears the ID and payment credential so you can enroll again or enter another ID.
+
+Deletion calls `DELETE /api/token-deletion?network=amex&tokenId=...` (or
+`network=mastercard`). Both the local Express server and Netlify forward it, without
+a request body, to `DELETE /temporary/{network}/agentic-tokens/{id}`.
+
 The entire client side of the ID&V flow lives in one file — **`client-react/src/idv.ts`** — as four
 plain `fetch` calls with no library dependency. If you're implementing this flow yourself, read
 that file; the components around it are just forms.

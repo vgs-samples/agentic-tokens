@@ -2,6 +2,7 @@ import express from "express";
 import { config as loadEnv } from "dotenv";
 import { config as vgsConfig, callVgs, getAccessToken, hasCredentials } from "./vgs.js";
 import { enrichCardSurface, enrichMissingCardSurfaces } from "./card-surface.js";
+import { deleteAgenticToken } from "./token-deletion.js";
 
 loadEnv();
 
@@ -139,6 +140,12 @@ app.delete("/api/intents", handler(async (req, res) => {
     `/agentic-tokens/${tokenId}/intents/${intentId}`,
     req.body
   );
+  res.status(status).json(data);
+}));
+
+// DELETE /api/token-deletion — shared temporary Amex/Mastercard deletion, no body.
+app.delete("/api/token-deletion", handler(async (req, res) => {
+  const { status, data } = await deleteAgenticToken(req.query.network, req.query.tokenId);
   res.status(status).json(data);
 }));
 

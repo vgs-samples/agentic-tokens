@@ -100,6 +100,7 @@
 #   /api/config       → /.netlify/functions/config
 #   /api/intents      → /.netlify/functions/intents
 #   /api/cryptograms  → /.netlify/functions/cryptograms
+#   /api/token-deletion → /.netlify/functions/token-deletion
 #   /api/confirmations → /.netlify/functions/confirmations
 #   /api/step-up-options → /.netlify/functions/step-up-options
 #   /api/otp          → /.netlify/functions/otp
