@@ -5,6 +5,8 @@ services:
       - .env
   client:
     build: ./client-react
+    environment:
+      PUBLIC_APP_URL: https://localhost:4200/
     volumes:
       - ./client-react/src:/app/src
       - ./client-react/index.html:/app/index.html
