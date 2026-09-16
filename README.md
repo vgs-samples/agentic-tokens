@@ -51,7 +51,7 @@ configure — the header shows which flow was detected.
 A vault may also report `cardholder_verification: "none"` — no verification step at all — in
 which case the app goes straight from enrollment to creating an intent.
 
-Both flows above are Visa. Mastercard runs Create Card → Enroll Token → Checkout Cryptogram. Amex runs Create Card → Enroll Token → Get Payment Credential through the Amex ACE endpoint. Neither uses cardholder verification, intents, or confirmation.
+Both flows above are Visa. Mastercard runs Create Card → Enroll Token → Checkout Cryptogram. Amex runs Create Card → Enroll Token → Get Payment Credential through the Amex ACE endpoint. Amex adds OTP verification when enrollment returns `cardholder_verification: "otp"`, using the returned `client_ref_id` and `stepUpRequest`. Older responses without these fields keep the existing flow. Neither network uses intents or confirmation.
 
 Each step auto-populates IDs into the next step.
 

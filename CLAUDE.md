@@ -8,7 +8,7 @@ A reference/demo app for the VGS Agentic Tokens API. Sandbox only. It supports t
 
 - **Visa** (full flow): Create Card → Enroll Token → Device Binding (FIDO/OTP) → Create Intent → Get Cryptogram → Confirm Transaction.
 - **Mastercard** (SCOF / Agent Pay): Create Card → Enroll Token → Get Cryptogram (checkout). No device binding, no intent ("verifiable intent" not yet enabled upstream), no confirmation.
-- **Amex** (ACE / Agentic Commerce): Create Card → Enroll Token → Get Payment Credential. No device binding, no intent, no confirmation.
+- **Amex** (ACE / Agentic Commerce): Create Card → Enroll Token → optional OTP verification → Get Payment Credential. OTP runs only when enrollment explicitly requests it; use its `client_ref_id` and `stepUpRequest`. Older responses retain the direct credential flow. No device binding, no intent, no confirmation.
 
 **Cardholder verification is discovered from the API, never configured here.** The enroll response
 carries `data.attributes.cardholder_verification` (`passkey` / `otp` / `none`) and

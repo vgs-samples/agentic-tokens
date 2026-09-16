@@ -39,12 +39,8 @@ export interface AppState {
    */
   cardholderVerification: CardholderVerification | null;
   agenticEnrollmentRequired: boolean;
-  /** Provider-neutral OTP context returned by enrollment or a pending credential request. */
+  /** Optional challenge returned by enrollment; older responses omit it. */
   otpContext: OtpContext | null;
-  /** A second, independent challenge created while requesting payment credentials. */
-  credentialOtpContext: OtpContext | null;
-  /** A credential returned by OTP verification, displayed by the cryptogram step. */
-  cryptogramResponse: unknown | null;
   /** Which step is currently active */
   activeStep: StepKey;
   /** Steps that have been completed */
@@ -63,8 +59,6 @@ function initialState(): AppState {
     cardholderVerification: null,
     agenticEnrollmentRequired: false,
     otpContext: null,
-    credentialOtpContext: null,
-    cryptogramResponse: null,
     activeStep: "card",
     completedSteps: new Set(),
     loadingSteps: new Set(),
@@ -115,12 +109,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       completed.add(step);
       const loading = new Set(s.loadingSteps);
       loading.delete(step);
-      const flow = stepsFor(
-        s.network,
-        s.cardholderVerification,
-        s.agenticEnrollmentRequired,
-        Boolean(s.credentialOtpContext),
-      );
+      const flow = stepsFor(s.network, s.cardholderVerification, s.agenticEnrollmentRequired);
       const idx = flow.indexOf(step);
       // Advance to the next step in the active flow; stay put on the last step.
       const next = idx >= 0 && idx + 1 < flow.length ? flow[idx + 1] : step;
@@ -157,20 +146,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setLogs([]);
   }, []);
 
-  // Recomputed only when a flow fact changes, not on every log line.
+  // Recomputed only when one of the three flow facts changes, not on every log line.
   const flow = useMemo(
-    () => stepsFor(
-      state.network,
-      state.cardholderVerification,
-      state.agenticEnrollmentRequired,
-      Boolean(state.credentialOtpContext),
-    ),
-    [
-      state.network,
-      state.cardholderVerification,
-      state.agenticEnrollmentRequired,
-      state.credentialOtpContext,
-    ],
+    () => stepsFor(state.network, state.cardholderVerification, state.agenticEnrollmentRequired),
+    [state.network, state.cardholderVerification, state.agenticEnrollmentRequired],
   );
 
   return (

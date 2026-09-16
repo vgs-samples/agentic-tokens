@@ -3,15 +3,15 @@
  *
  * This is the whole client side of the ID&V flow, deliberately kept in one file with no
  * dependency on the VGS auth library. Visa obtains options with the first call; a provider
- * may instead return the same `stepUpRequest` shape with enrollment or credentials.
+ * may instead return the same `stepUpRequest` shape with enrollment.
  *
  *   1. getStepUpOptions()   — which methods are available (Visa when not preloaded)
  *   2. requestOtp()         — send the code via the chosen method
  *   3. submitOtp()          — verify the code (this completes ID&V)
  *   4. completeEnrollment() — finish enrolling the token, now that ID&V passed
  *
- * Order matters: the token cannot create intents until completeEnrollment() succeeds, and
- * completeEnrollment() must come after submitOtp().
+ * For Visa, completeEnrollment() must follow submitOtp() when enrollment is required,
+ * before creating intents. Amex continues directly to payment credentials after OTP.
  *
  * Every call goes to *this app's own backend* (`/api/...`), which forwards it to the VGS
  * API with server-side credentials — see `server/server.js`. Keep it that way in your own
