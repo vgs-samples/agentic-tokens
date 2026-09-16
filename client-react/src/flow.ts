@@ -15,6 +15,7 @@ export type StepKey =
   | "enroll"
   | "deviceBinding"
   | "idv"
+  | "credentialOtp"
   | "agenticEnroll"
   | "intent"
   | "cryptogram"
@@ -31,7 +32,7 @@ export type StepKey =
  *    response (`session.needsOtp`), not here.
  *  - "otp"     — passkey-exempt cardholder ID&V: a one-time passcode driven
  *    server-to-server, no iframe and no `assurance_data`. See `src/idv.ts`.
- *  - "none"    — no cardholder verification step at all (Mastercard, Amex, and Visa
+ *  - "none"    — no cardholder verification step at all (Mastercard, and Visa
  *    vaults that waive both the passkey and ID&V).
  *
  * Absent from an older response means "passkey" — the behaviour the API had before the
@@ -66,18 +67,26 @@ export function flowFromEnrollResponse(enrollResponse: any): {
 
 /**
  * Which optional phases of the flow each network runs. This is what replaced the old
- * fixed `FLOWS` table: only Visa has phases beyond the cryptogram, and which of *those*
- * run depends on the enroll response rather than the network alone.
+ * fixed `FLOWS` table. Verification is selected from response state; intent and
+ * confirmation remain network-capability decisions.
  *  - `enrollment`   — the post-enroll cardholder-verification / complete-enrollment phase.
  *  - `intent`       — spending intents ("verifiable intent" isn't enabled upstream for
  *    Mastercard SCOF or Amex ACE yet).
  *  - `confirmation` — reporting the outcome back (card-scoped checkout needs none).
  * See docs/temporary-mc-user-guide.md in the maranui repo for the Mastercard shape.
  */
-const NETWORK_PHASES: Record<Network, { enrollment: boolean; intent: boolean; confirmation: boolean }> = {
-  visa: { enrollment: true, intent: true, confirmation: true },
-  mastercard: { enrollment: false, intent: false, confirmation: false },
-  amex: { enrollment: false, intent: false, confirmation: false },
+const NETWORK_PHASES: Record<
+  Network,
+  {
+    passkeyStep: Extract<StepKey, "deviceBinding"> | null;
+    otpStep: Extract<StepKey, "idv"> | null;
+    intent: boolean;
+    confirmation: boolean;
+  }
+> = {
+  visa: { passkeyStep: "deviceBinding", otpStep: "idv", intent: true, confirmation: true },
+  mastercard: { passkeyStep: null, otpStep: null, intent: false, confirmation: false },
+  amex: { passkeyStep: null, otpStep: "idv", intent: false, confirmation: false },
 };
 
 /**
@@ -96,17 +105,17 @@ export function stepsFor(
   network: Network,
   verification: CardholderVerification | null,
   agenticEnrollmentRequired: boolean,
+  credentialOtpRequired = false,
 ): StepKey[] {
   const phases = NETWORK_PHASES[network];
   const steps: StepKey[] = ["card", "enroll"];
-  if (phases.enrollment) {
-    const v = verification ?? DEFAULT_CARDHOLDER_VERIFICATION;
-    if (v === "passkey") steps.push("deviceBinding");
-    if (v === "otp") steps.push("idv");
-    if (agenticEnrollmentRequired) steps.push("agenticEnroll");
-  }
+  const v = verification ?? DEFAULT_CARDHOLDER_VERIFICATION;
+  if (v === "passkey" && phases.passkeyStep) steps.push(phases.passkeyStep);
+  if (v === "otp" && phases.otpStep) steps.push(phases.otpStep);
+  if (agenticEnrollmentRequired) steps.push("agenticEnroll");
   if (phases.intent) steps.push("intent");
   steps.push("cryptogram");
+  if (credentialOtpRequired) steps.push("credentialOtp");
   if (phases.confirmation) steps.push("confirm");
   return steps;
 }
@@ -124,7 +133,7 @@ export const CARDHOLDER_VERIFICATION_META: Record<
   otp: {
     label: "One-time code (ID&V)",
     badgeCss: "bg-purple-100 text-purple-800",
-    hint: "Passkey-exempt vault: OTP verification with no iframe, then a separate enrollment call. See src/idv.ts.",
+    hint: "OTP verification with no iframe. Follow the response state; only some flows require a separate enrollment call.",
   },
   none: {
     label: "None",
