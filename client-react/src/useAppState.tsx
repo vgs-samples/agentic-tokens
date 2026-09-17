@@ -18,9 +18,19 @@ import {
   type StepKey,
 } from "./flow";
 
+import { AMEX_ENROLLMENT_EXAMPLE } from "./amex";
+
 export type { CardholderVerification, Network, StepKey } from "./flow";
 
+export interface OtpContext {
+  clientRefId: string;
+  methods: Array<{ method: string; identifier: string; value?: string }>;
+}
+
 export interface AppState {
+  agentContext: import("./amex").AgentContext;
+  amexDeviceContext: (import("./amex").PaymentDeviceContext & { cardId: string }) | null;
+  consumerEmail: string;
   cardId: string | null;
   tokenId: string | null;
   intentId: string | null;
@@ -34,6 +44,8 @@ export interface AppState {
    */
   cardholderVerification: CardholderVerification | null;
   agenticEnrollmentRequired: boolean;
+  /** Optional challenge returned by enrollment; older responses omit it. */
+  otpContext: OtpContext | null;
   /** Which step is currently active */
   activeStep: StepKey;
   /** Steps that have been completed */
@@ -44,6 +56,9 @@ export interface AppState {
 
 function initialState(): AppState {
   return {
+    agentContext: { ...AMEX_ENROLLMENT_EXAMPLE.agent },
+    amexDeviceContext: null,
+    consumerEmail: "",
     cardId: null,
     tokenId: null,
     intentId: null,
@@ -51,6 +66,7 @@ function initialState(): AppState {
     network: DEFAULT_NETWORK,
     cardholderVerification: null,
     agenticEnrollmentRequired: false,
+    otpContext: null,
     activeStep: "card",
     completedSteps: new Set(),
     loadingSteps: new Set(),

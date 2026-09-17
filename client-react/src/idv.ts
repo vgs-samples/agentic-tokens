@@ -1,24 +1,24 @@
 /**
- * Visa cardholder ID&V flow (passkey-exempt vaults) — everything the browser does.
+ * Cardholder OTP flow over the Visa-compatible public contract.
  *
  * This is the whole client side of the ID&V flow, deliberately kept in one file with no
- * dependency on the VGS auth library. There is no iframe, no passkey ceremony, and no
- * `assurance_data` to collect: verification is four plain JSON calls.
+ * dependency on the VGS auth library. Visa obtains options with the first call; a provider
+ * may instead return the same `stepUpRequest` shape with enrollment.
  *
- *   1. getStepUpOptions()   — which verification methods does the cardholder have?
+ *   1. getStepUpOptions()   — which methods are available (Visa when not preloaded)
  *   2. requestOtp()         — send the code via the chosen method
  *   3. submitOtp()          — verify the code (this completes ID&V)
  *   4. completeEnrollment() — finish enrolling the token, now that ID&V passed
  *
- * Order matters: the token cannot create intents until completeEnrollment() succeeds, and
- * completeEnrollment() must come after submitOtp().
+ * For Visa, completeEnrollment() must follow submitOtp() when enrollment is required,
+ * before creating intents. Amex continues directly to payment credentials after OTP.
  *
  * Every call goes to *this app's own backend* (`/api/...`), which forwards it to the VGS
  * API with server-side credentials — see `server/server.js`. Keep it that way in your own
  * integration: the browser never needs VGS credentials for this flow.
  *
- * The `clientRefId` ties steps 1–3 together. Generate it once per verification attempt
- * (`newClientRefId()`) and pass the same value to all three.
+ * The `clientRefId` ties the calls together. Visa clients generate it once with
+ * `newClientRefId()`. When an earlier response supplies one, treat it as opaque and echo it.
  *
  * Contrast with the passkey flow (`vgs-agentic-auth.js` + `DeviceBinding.tsx`), where the
  * library manages a Visa iframe and returns `assuranceData` for intent creation.
@@ -36,7 +36,7 @@ export interface OtpMethod {
 
 /** Result of step 1. */
 export interface StepUpOptions {
-  /** Visa's step-up status, typically "CHALLENGE". */
+  /** Step-up status, typically "CHALLENGE". */
   status?: string;
   /**
    * Whether the FIDO passkey ceremony is required. `false` confirms the vault is on the

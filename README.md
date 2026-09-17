@@ -51,15 +51,27 @@ configure — the header shows which flow was detected.
 A vault may also report `cardholder_verification: "none"` — no verification step at all — in
 which case the app goes straight from enrollment to creating an intent.
 
-Both flows above are Visa. Mastercard runs Create Card → Enroll Token → Checkout Cryptogram. Amex runs Create Card → Enroll Token → Get Payment Credential through the Amex ACE endpoint. Neither uses cardholder verification, intents, or confirmation.
+Both flows above are Visa. Mastercard runs Create Card → Enroll Token → Checkout Cryptogram. Amex runs Create Card → Enroll Token → Get Payment Credential through the Amex ACE endpoint. Amex adds OTP verification when enrollment returns `cardholder_verification: "otp"`, using the returned `client_ref_id` and `stepUpRequest`. Older responses without these fields keep the existing flow. Neither network uses intents or confirmation. Amex payment credentials can also require OTP; the app handles it inside the payment step and only marks the payment complete when the final credential arrives.
 
 Each step auto-populates IDs into the next step.
+
+After Amex returns a payment credential, **Delete Enrollment** appears as the final
+step. Its editable ID defaults to the latest enrollment in the current flow. Click
+**Delete Enrollment** to delete that enrollment or paste another ID. The demo shows
+the API response and only marks deletion complete when the API confirms `deleted`.
+Docker and Netlify proxy this action to `DELETE /temporary/amex/agentic-tokens/{enrollmentId}`.
+
+If Amex enrollment returns HTTP `409` with `detail: "Enrollment already exists."`,
+the Enroll step also offers an editable enrollment ID and **Delete Enrollment**.
+The error does not include the existing ID, so the field starts with the latest ID
+from the current flow if available, or stays empty for manual entry. After a
+confirmed deletion, click **Enroll** to retry; deletion does not complete enrollment.
 
 The entire client side of the ID&V flow lives in one file — **`client-react/src/idv.ts`** — as four
 plain `fetch` calls with no library dependency. If you're implementing this flow yourself, read
 that file; the components around it are just forms.
 
-> **Sandbox tip:** When prompted for a one-time code, use `456789` — it is always accepted in sandbox.
+> **Sandbox OTP:** Cardholder ID&V and Amex payment verification prefill `111111` when the server has `VGS_VAULT_ENV=sandbox`. The code remains editable; other environments start empty. The Visa device-binding demo uses its separate `456789` code.
 
 ## Environment Variables
 
@@ -69,6 +81,7 @@ that file; the components around it are just forms.
 | `VGS_CLIENT_SECRET` | (required) | OAuth client secret |
 | `VGS_API_URL` | `https://gw-01-sandbox.vgsapi.com` | Agentic Tokens API base URL |
 | `VGS_CMP_API_URL` | `https://sandbox.vgsapi.com` | Card Management Platform (CMP) API base URL |
+| `VGS_VAULT_ENV` | `sandbox` | Vault environment; enables the sandbox OTP prefill |
 | `PORT` | `3000` | Server port |
 
 ### API URLs by environment
@@ -133,3 +146,26 @@ Use the Vellum MCP server for this. Create a marketing landing page for Acme Cof
 ```
 
 See `mcp-server/README.md` for the demo script, the tool contract, and copy-paste configs.
+
+## Amex ACE 1.1
+
+Use this demo branch with the matching ACE 1.1 API branch and deployment setting
+`AMEX_SPEC_VERSION=1.1-20260618`. Enrollment fields are prefilled from the
+`decryptedEnrollmentRequestPayload` example in `ACE-OAI-1.1_v6.yaml`: Jane Jones,
+account `user-12345`, device `565266`, IP `192.168.1.1`, form factor `MOBILE`,
+distinct billing last-name count `2`, and agent NexusAI (`gpt-4.1`). These are editable
+demo values. The example's unsupported `AI_PLATFORM` placeholder is omitted;
+select a supported platform at checkout. Browser language and user agent come from the browser and reuse the
+Visa `browser_data` field vocabulary. Email and the checkout amount/currency/merchant
+fields remain shared with the existing flows.
+
+At checkout, explicitly select the agent platform, purchase approval and partner
+verification outcome. This demo does not perform partner SMS/device/passkey authentication;
+it only offers no partner step-up or unsuccessful partner step-up. It never invents a successful
+verification or automatically consents. The API supports the full delegated-signoff metadata
+for integrating applications that perform their own authentication.
+
+A payment OTP challenge stays in the payment step, using the existing delivery/verification
+API helpers. ACE 1.1's Verify OTP schema documents an enrollment result only. If that is what
+the server returns, the demo reports that no credential was returned and leaves payment
+incomplete. It does not automatically issue a second credential request.

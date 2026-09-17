@@ -153,7 +153,7 @@ function redactSensitiveFields(value) {
 }
 
 function isSensitiveKey(key) {
-  return /^(pan|cvc|cvv|number|card_number|security_code|cryptogram)$/i.test(key);
+  return /^(pan|cvc|cvv|number|card_number|security_code|cryptogram|otp)$/i.test(key);
 }
 
 function isSandboxConfig() {

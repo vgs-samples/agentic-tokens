@@ -1,32 +1,38 @@
 import { useState } from "react";
+import { useOtpInput } from "../useOtpInput";
 import { getStepUpOptions, idvErrorInfo, newClientRefId, requestOtp, submitOtp, type OtpMethod } from "../idv";
 import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Button } from "./ui";
-
-const SANDBOX_OTP = "456789";
 
 interface Props {
   consumerEmail: string;
 }
 
 /**
- * Cardholder verification for passkey-exempt vaults — the UI over `src/idv.ts`.
+ * Cardholder verification over the shared Visa-compatible OTP contract.
  *
  * Read `idv.ts` for the API calls themselves; this component is only the form around them:
- * fetch the options, pick a method, send the code, submit it. No iframe, no passkey, and
- * nothing to carry into intent creation.
+ * Visa fetches its options separately. Providers that return challenges with an
+ * enrollment response preload the exact same method shape.
  */
 export function CardholderIdv({ consumerEmail }: Props) {
   const { state, setState, log, setLoading, completeStep } = useAppState();
+  const context = state.otpContext;
   const { loading, num } = useStepStatus("idv");
   const [response, setResponse] = useState<unknown>(null);
-  // One correlation id per verification attempt, shared by all three calls.
-  const [clientRefId, setClientRefId] = useState(() => newClientRefId());
-  const [methods, setMethods] = useState<OtpMethod[]>([]);
-  const [selectedIdentifier, setSelectedIdentifier] = useState("");
+  // Visa creates a correlation id before fetching options. Amex returns an opaque
+  // provider reference with its already-known challenge methods; callers only echo it.
+  const [visaClientRefId, setVisaClientRefId] = useState(() => newClientRefId());
+  const [visaMethods, setVisaMethods] = useState<OtpMethod[]>([]);
+  const [selectedMethodIdentifier, setSelectedMethodIdentifier] = useState("");
   const [otpDelivered, setOtpDelivered] = useState(false);
-  const [otp, setOtp] = useState(SANDBOX_OTP);
+  const { otp, setOtp } = useOtpInput();
+  const clientRefId = context?.clientRefId ?? visaClientRefId;
+  const methods = context?.methods ?? visaMethods;
+  const selectedIdentifier = methods.some(({ identifier }) => identifier === selectedMethodIdentifier)
+    ? selectedMethodIdentifier
+    : methods[0]?.identifier ?? "";
 
   function fail(err: unknown) {
     const info = idvErrorInfo(err);
@@ -40,8 +46,8 @@ export function CardholderIdv({ consumerEmail }: Props) {
     try {
       const options = await getStepUpOptions(state.tokenId!, clientRefId);
       setResponse(options.raw);
-      setMethods(options.methods);
-      setSelectedIdentifier(options.methods[0]?.identifier ?? "");
+      setVisaMethods(options.methods);
+      setSelectedMethodIdentifier(options.methods[0]?.identifier ?? "");
       setOtpDelivered(false);
       log(`Step ${num}: status=${options.status} passkeyRequired=${options.passkeyRequired}`);
       if (options.passkeyRequired) {
@@ -95,8 +101,8 @@ export function CardholderIdv({ consumerEmail }: Props) {
   return (
     <Step stepKey="idv" title="Cardholder Verification (ID&V)" response={response}>
       <p className="text-xs text-gray-500">
-        Passkey-exempt vaults verify the cardholder with a one-time code — no iframe and no
-        passkey. All the client-side code for this step is in <code>src/idv.ts</code>.
+        Verify the cardholder with a one-time code using the same API contract for Visa and Amex.{" "}
+        All client-side calls are in <code>src/idv.ts</code>.
       </p>
       <Field label="Token ID">
         <input
@@ -105,10 +111,19 @@ export function CardholderIdv({ consumerEmail }: Props) {
           onChange={(e) => setState((s) => ({ ...s, tokenId: e.target.value }))}
         />
       </Field>
-      <Field label="Client Reference ID (shared by all verification calls)">
-        <input className="input" value={clientRefId} onChange={(e) => setClientRefId(e.target.value)} />
+      <Field label="Client Reference ID (echoed by all verification calls)">
+        <input
+          className="input"
+          value={clientRefId}
+          readOnly={Boolean(context)}
+          onChange={(e) => setVisaClientRefId(e.target.value)}
+        />
       </Field>
-      <Button onClick={handleGetOptions} disabled={loading}>Get Verification Options</Button>
+      {context ? (
+        <p className="text-xs text-gray-500 mt-2">Verification options were returned by the previous API call.</p>
+      ) : (
+        <Button onClick={handleGetOptions} disabled={loading}>Get Verification Options</Button>
+      )}
 
       {methods.length > 0 && (
         <>
@@ -117,7 +132,7 @@ export function CardholderIdv({ consumerEmail }: Props) {
               <select
                 className="input w-64"
                 value={selectedIdentifier}
-                onChange={(e) => setSelectedIdentifier(e.target.value)}
+                onChange={(e) => setSelectedMethodIdentifier(e.target.value)}
               >
                 {methods.map((m) => (
                   <option key={m.identifier} value={m.identifier}>
@@ -137,7 +152,8 @@ export function CardholderIdv({ consumerEmail }: Props) {
                 <input
                   className="input w-48"
                   maxLength={6}
-                  placeholder={SANDBOX_OTP}
+                  inputMode="numeric"
+                  placeholder="Code from SMS or email"
                   value={otp}
                   onChange={(e) => setOtp(e.target.value)}
                 />

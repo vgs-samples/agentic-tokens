@@ -18,7 +18,8 @@ export type StepKey =
   | "agenticEnroll"
   | "intent"
   | "cryptogram"
-  | "confirm";
+  | "confirm"
+  | "deleteEnrollment";
 
 /**
  * How the cardholder must be verified, straight from the enroll response's
@@ -31,7 +32,7 @@ export type StepKey =
  *    response (`session.needsOtp`), not here.
  *  - "otp"     — passkey-exempt cardholder ID&V: a one-time passcode driven
  *    server-to-server, no iframe and no `assurance_data`. See `src/idv.ts`.
- *  - "none"    — no cardholder verification step at all (Mastercard, Amex, and Visa
+ *  - "none"    — no cardholder verification step at all (Mastercard, unchallenged Amex, and Visa
  *    vaults that waive both the passkey and ID&V).
  *
  * Absent from an older response means "passkey" — the behaviour the API had before the
@@ -66,18 +67,18 @@ export function flowFromEnrollResponse(enrollResponse: any): {
 
 /**
  * Which optional phases of the flow each network runs. This is what replaced the old
- * fixed `FLOWS` table: only Visa has phases beyond the cryptogram, and which of *those*
- * run depends on the enroll response rather than the network alone.
+ * fixed `FLOWS` table. Visa confirmation and Amex enrollment deletion follow the cryptogram.
  *  - `enrollment`   — the post-enroll cardholder-verification / complete-enrollment phase.
  *  - `intent`       — spending intents ("verifiable intent" isn't enabled upstream for
  *    Mastercard SCOF or Amex ACE yet).
  *  - `confirmation` — reporting the outcome back (card-scoped checkout needs none).
+ *  - `deletion`     — optional user-triggered enrollment cleanup after payment.
  * See docs/temporary-mc-user-guide.md in the maranui repo for the Mastercard shape.
  */
-const NETWORK_PHASES: Record<Network, { enrollment: boolean; intent: boolean; confirmation: boolean }> = {
-  visa: { enrollment: true, intent: true, confirmation: true },
-  mastercard: { enrollment: false, intent: false, confirmation: false },
-  amex: { enrollment: false, intent: false, confirmation: false },
+const NETWORK_PHASES: Record<Network, { enrollment: boolean; intent: boolean; confirmation: boolean; deletion: boolean }> = {
+  visa: { enrollment: true, intent: true, confirmation: true, deletion: false },
+  mastercard: { enrollment: false, intent: false, confirmation: false, deletion: false },
+  amex: { enrollment: false, intent: false, confirmation: false, deletion: true },
 };
 
 /**
@@ -89,6 +90,9 @@ const NETWORK_PHASES: Record<Network, { enrollment: boolean; intent: boolean; co
  * verification step runs (if any), and `agentic_enrollment_required` decides whether the extra
  * enrollment call is needed. Every combination is therefore handled, including a Visa vault
  * that waives verification entirely.
+ *
+ * Amex adds ID&V only when enrollment explicitly requests OTP; older responses keep
+ * the direct enrollment-to-credential flow.
  *
  * `verification` is null until the enroll response reports it; the default applies until then.
  */
@@ -104,10 +108,13 @@ export function stepsFor(
     if (v === "passkey") steps.push("deviceBinding");
     if (v === "otp") steps.push("idv");
     if (agenticEnrollmentRequired) steps.push("agenticEnroll");
+  } else if (network === "amex" && verification === "otp") {
+    steps.push("idv");
   }
   if (phases.intent) steps.push("intent");
   steps.push("cryptogram");
   if (phases.confirmation) steps.push("confirm");
+  if (phases.deletion) steps.push("deleteEnrollment");
   return steps;
 }
 
@@ -124,7 +131,7 @@ export const CARDHOLDER_VERIFICATION_META: Record<
   otp: {
     label: "One-time code (ID&V)",
     badgeCss: "bg-purple-100 text-purple-800",
-    hint: "Passkey-exempt vault: OTP verification with no iframe, then a separate enrollment call. See src/idv.ts.",
+    hint: "OTP verification with no iframe. Visa may require a separate enrollment call; Amex continues to payment credentials.",
   },
   none: {
     label: "None",

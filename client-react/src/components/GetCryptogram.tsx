@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { api } from "../api";
+import { useOtpInput } from "../useOtpInput";
+import { AMEX_BILLING_POSTAL_CODE_EXAMPLE, paymentBillingAttributes, paymentOutcome, paymentRiskAttributes, type PaymentChallenge } from "../amex";
+import { requestOtp, submitOtp } from "../idv";
+import { apiResponse } from "../api";
 import { useAppState, useStepStatus } from "../useAppState";
 import { CRYPTOGRAM_STYLE } from "../flow";
 import { Step } from "./Step";
@@ -15,7 +18,7 @@ const CURRENCY_CODES = [
 ] as const;
 
 export function GetCryptogram() {
-  const { state, log, setLoading, completeStep } = useAppState();
+  const { state, setState, log, setLoading, completeStep } = useAppState();
   const { loading, num } = useStepStatus("cryptogram");
   // Branch on the cryptogram *style*, not the network name, so a new network
   // maps onto an existing flavour (intent-scoped vs SCOF checkout) by config.
@@ -34,18 +37,42 @@ export function GetCryptogram() {
   const [txnCountry, setTxnCountry] = useState("US");
   const [txnUrl, setTxnUrl] = useState("https://www.bestbuy.com");
 
-  // Mastercard SCOF and Amex ACE share the same demo checkout payload.
+  // Mastercard SCOF and Amex ACE share amount and currency fields.
   const [cardScopedAmount, setCardScopedAmount] = useState("5.33");
-  const [cardScopedCurrency, setCardScopedCurrency] = useState("840");
+  const [cardScopedCurrency, setCardScopedCurrency] = useState<string>(CURRENCY_CODES[0].value);
   const [cardScopedMerchant, setCardScopedMerchant] = useState("Best Buy");
+  const [billingPostalCode, setBillingPostalCode] = useState(AMEX_BILLING_POSTAL_CODE_EXAMPLE);
 
+  const agentPlatform = state.agentContext.llm_platform ?? "OPEN_AI";
+  const [userSignOff, setUserSignOff] = useState<"YES" | "NO">("YES");
+  const [partnerMethod, setPartnerMethod] = useState<"N" | "U">("N");
+  const [challenge, setChallenge] = useState<PaymentChallenge | null>(null);
+  const [selectedMethod, setSelectedMethod] = useState("");
+  const { otp, setOtp, resetOtp } = useOtpInput();
+  const [otpDelivered, setOtpDelivered] = useState(false);
   const [response, setResponse] = useState<unknown>(null);
   const [finalResult, setFinalResult] = useState<unknown>(null);
 
   async function handleGet() {
     setLoading("cryptogram", true);
     log(`Step ${num}: Getting cryptogram...`);
+    if (isAmex) setState((s) => {
+      const completedSteps = new Set(s.completedSteps);
+      completedSteps.delete("cryptogram");
+      return { ...s, completedSteps };
+    });
+    setFinalResult(null);
+    setChallenge(null);
+    resetOtp();
+    setOtpDelivered(false);
     try {
+      if (isAmex && (!state.agentContext.agent_name.trim() || !txnUrl.trim())) {
+        throw new Error("Provide agent name and merchant URL.");
+      }
+      const deviceContext = state.amexDeviceContext;
+      if (isAmex && (!deviceContext || deviceContext.cardId !== state.cardId)) {
+        throw new Error("Enroll this card with device context before requesting an Amex credential.");
+      }
       // SCOF checkout is card-scoped with no intent; intent-style is
       // intent-scoped with a transaction-data cart.
       const query = isCardScoped
@@ -56,7 +83,17 @@ export function GetCryptogram() {
         ? {
             transaction_amount: cardScopedAmount,
             transaction_currency_code: cardScopedCurrency,
-            merchant_name: cardScopedMerchant,
+            ...(isAmex ? {
+              ...paymentRiskAttributes(deviceContext!),
+              ...paymentBillingAttributes(billingPostalCode),
+              merchant_url: txnUrl,
+              agent: {
+                agent_name: state.agentContext.agent_name,
+                llm_platform: agentPlatform,
+              },
+              user_sign_off: userSignOff,
+              partner_delegated_signoff: { partner_step_up_method: partnerMethod },
+            } : { merchant_name: cardScopedMerchant }),
           }
         : {
             transaction_data: [{
@@ -70,11 +107,28 @@ export function GetCryptogram() {
             }],
           };
 
-      const data = await api("POST", query, {
+      const result = await apiResponse<{ data?: { id?: string; attributes?: Record<string, unknown> }; error?: string; detail?: string }>("POST", query, {
         data: { type: "cryptograms", attributes },
       });
+      const data = result.body;
       setResponse(data);
-      if (data?.data?.id) {
+      if (!result.ok) {
+        log(`Step ${num}: API returned HTTP ${result.status} — ${data?.detail ?? data?.error ?? JSON.stringify(data)}`);
+        setLoading("cryptogram", false);
+        return;
+      }
+      if (isAmex) {
+        const outcome = paymentOutcome(data);
+        if (outcome.challenge) {
+          setChallenge(outcome.challenge);
+          setSelectedMethod(outcome.challenge.methods[0].identifier);
+          log(`Step ${num}: Payment requires cardholder verification`);
+          setLoading("cryptogram", false);
+        } else {
+          setFinalResult(outcome.credential);
+          completeStep("cryptogram");
+        }
+      } else if (data?.data?.id) {
         log(`Step ${num}: Cryptogram received`);
         setFinalResult(data.data.attributes);
         completeStep("cryptogram");
@@ -83,9 +137,43 @@ export function GetCryptogram() {
         setLoading("cryptogram", false);
       }
     } catch (err) {
+      setResponse({ error: (err as Error).message });
       log(`Step ${num}: Error — ` + (err as Error).message);
       setLoading("cryptogram", false);
     }
+  }
+
+  async function handlePaymentOtp(verify: boolean) {
+    if (!challenge) return;
+    setLoading("cryptogram", true);
+    try {
+      if (!verify) {
+        setResponse(await requestOtp(state.tokenId!, challenge.clientRefId, selectedMethod));
+        setOtpDelivered(true);
+      } else {
+        const body = await submitOtp(state.tokenId!, challenge.clientRefId, state.consumerEmail, otp.trim()) as {
+          data?: { attributes?: { result?: unknown } };
+        };
+        setResponse(body);
+        if (!body.data?.attributes?.result) {
+          const message = "OTP was processed but no payment credential was returned. The payment is not complete; inspect the API response before retrying.";
+          setResponse({ error: message, response: body });
+          log(`Step ${num}: ${message}`);
+          setLoading("cryptogram", false);
+          return;
+        }
+        const outcome = paymentOutcome({ data: body.data.attributes.result });
+        if (!outcome.credential) throw new Error("Payment verification did not return a final credential.");
+        setFinalResult(outcome.credential);
+        setChallenge(null);
+        resetOtp();
+        completeStep("cryptogram");
+      }
+    } catch (err) {
+      log(`Step ${num}: ${(err as Error).message}`);
+      setResponse({ error: (err as Error).message });
+    }
+    setLoading("cryptogram", false);
   }
 
   const title = isAmex
@@ -114,9 +202,9 @@ export function GetCryptogram() {
                 </select>
               </Field>
             </Row>
-            <Field label="Merchant Name">
+            {!isAmex && <Field label="Merchant Name">
               <input className="input" value={cardScopedMerchant} onChange={(e) => setCardScopedMerchant(e.target.value)} />
-            </Field>
+            </Field>}
             <p className="text-xs text-gray-500 mt-1">
               {isAmex ? "Amex ACE" : "SCOF checkout"} runs directly against the enrolled card — no intent binding.
             </p>
@@ -147,9 +235,32 @@ export function GetCryptogram() {
             </Field>
           </>
         )}
-        <Button onClick={handleGet} disabled={loading}>
+        {isAmex && <>
+          <Field label="Billing postal code">
+            <input className="input" autoComplete="billing postal-code" value={billingPostalCode} onChange={(e) => setBillingPostalCode(e.target.value)} />
+          </Field>
+          <p className="text-xs text-gray-500 mt-2">Prefilled with the Amex example. Edit as needed; used when the stored card has no billing postal code.</p>
+          <Field label="Merchant URL"><input className="input" value={txnUrl} onChange={(e) => setTxnUrl(e.target.value)} /></Field>
+          <Field label="Agent name"><input className="input" value={state.agentContext.agent_name} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, agent_name: e.target.value } }))} /></Field>
+          <Field label="Agent platform"><select className="input" value={agentPlatform} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, llm_platform: e.target.value as typeof agentPlatform } }))}><option value="OPEN_AI">OpenAI</option></select></Field>
+          <Field label="Cardholder approved this purchase"><select className="input" value={userSignOff} onChange={(e) => setUserSignOff(e.target.value as typeof userSignOff)}><option value="YES">Yes</option><option value="NO">No</option></select></Field>
+          <Field label="Partner authentication"><select className="input" value={partnerMethod} onChange={(e) => setPartnerMethod(e.target.value as typeof partnerMethod)}><option value="N">No partner step-up (user not present)</option><option value="U">Unsuccessful partner step-up</option></select></Field>
+          <p className="text-xs text-gray-500 mt-2">This demo does not perform partner SMS, device or passkey authentication. Amex may request its own verification.</p>
+        </>}
+        <Button onClick={handleGet} disabled={loading || Boolean(challenge)}>
           {isAmex ? "Get Credential" : isScof ? "Checkout" : "Get Cryptogram"}
         </Button>
+        {challenge && <>
+          <Field label="Payment verification method"><select className="input" value={selectedMethod} onChange={(e) => { setSelectedMethod(e.target.value); setOtpDelivered(false); resetOtp(); }}>
+            {challenge.methods.map((method) => <option key={method.identifier} value={method.identifier}>{method.method} {method.value}</option>)}
+          </select></Field>
+          <Button onClick={() => void handlePaymentOtp(false)} disabled={loading}>{otpDelivered ? "Resend code" : "Send code"}</Button>
+          {otpDelivered && <>
+            <Field label="Payment verification code"><input className="input" autoComplete="one-time-code" value={otp} onChange={(e) => setOtp(e.target.value)} /></Field>
+            <Button onClick={() => void handlePaymentOtp(true)} disabled={loading || !otp.trim()}>Verify payment</Button>
+          </>}
+          <Button variant="secondary" onClick={() => { setChallenge(null); resetOtp(); setOtpDelivered(false); }} disabled={loading}>Discard pending attempt</Button>
+        </>}
       </Step>
 
       {finalResult && (
