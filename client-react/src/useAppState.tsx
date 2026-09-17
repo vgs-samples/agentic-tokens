@@ -29,6 +29,7 @@ export interface OtpContext {
 
 export interface AppState {
   agentContext: import("./amex").AgentContext;
+  amexDeviceContext: (import("./amex").PaymentDeviceContext & { cardId: string }) | null;
   consumerEmail: string;
   cardId: string | null;
   tokenId: string | null;
@@ -56,6 +57,7 @@ export interface AppState {
 function initialState(): AppState {
   return {
     agentContext: { ...AMEX_ENROLLMENT_EXAMPLE.agent },
+    amexDeviceContext: null,
     consumerEmail: "",
     cardId: null,
     tokenId: null,

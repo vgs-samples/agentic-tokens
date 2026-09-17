@@ -61,6 +61,30 @@ export interface PaymentChallenge {
   methods: Array<{ method: string; identifier: string; value?: string }>;
 }
 
+// Demo prefill from ACE 1.1; Maranui never supplies an example postal code.
+export const AMEX_BILLING_POSTAL_CODE_EXAMPLE = "12345";
+
+export function paymentBillingAttributes(postalCode: string) {
+  const zip = postalCode.trim();
+  return zip ? { billing_address: { zip } } : {};
+}
+
+export type PaymentDeviceContext = Pick<EnrollmentContext,
+  "deviceId" | "ipAddress" | "language" | "formFactor" | "browserUserAgent">;
+
+export function paymentRiskAttributes(context: PaymentDeviceContext) {
+  if ([context.deviceId, context.ipAddress, context.language, context.formFactor].some((value) => !value.trim())) {
+    throw new Error("Provide device ID, IP address, language and form factor before requesting a credential.");
+  }
+  return {
+    device_id: context.deviceId,
+    browser_data: {
+      ipAddress: context.ipAddress.trim(), browserLanguage: context.language, userAgent: context.browserUserAgent,
+    },
+    risk: { account: { action_channel: "WEB" }, device: { form_factor: context.formFactor } },
+  };
+}
+
 export function paymentOutcome(body: unknown): { challenge?: PaymentChallenge; credential?: Record<string, unknown> } {
   const value = body as { data?: { attributes?: Record<string, unknown> } };
   const attrs = value?.data?.attributes;

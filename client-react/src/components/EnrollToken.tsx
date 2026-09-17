@@ -74,7 +74,13 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
               methods: attributes.stepUpRequest,
             }
           : null;
-        setState((s) => ({ ...s, tokenId, network, otpContext, consumerEmail }));
+        setState((s) => ({
+          ...s, tokenId, network, otpContext, consumerEmail,
+          amexDeviceContext: isAmex && state.cardId ? {
+            cardId: state.cardId, deviceId, ipAddress, formFactor,
+            language: navigator.language, browserUserAgent: navigator.userAgent,
+          } : null,
+        }));
         log(`Step ${num}: Token enrolled — ${tokenId} (${network})`);
 
         // The server tells us which flow this vault uses; the remaining steps follow from

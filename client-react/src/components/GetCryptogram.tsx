@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useOtpInput } from "../useOtpInput";
-import { paymentOutcome, type PaymentChallenge } from "../amex";
+import { AMEX_BILLING_POSTAL_CODE_EXAMPLE, paymentBillingAttributes, paymentOutcome, paymentRiskAttributes, type PaymentChallenge } from "../amex";
 import { requestOtp, submitOtp } from "../idv";
-import { api } from "../api";
+import { apiResponse } from "../api";
 import { useAppState, useStepStatus } from "../useAppState";
 import { CRYPTOGRAM_STYLE } from "../flow";
 import { Step } from "./Step";
@@ -41,6 +41,7 @@ export function GetCryptogram() {
   const [cardScopedAmount, setCardScopedAmount] = useState("5.33");
   const [cardScopedCurrency, setCardScopedCurrency] = useState("840");
   const [cardScopedMerchant, setCardScopedMerchant] = useState("Best Buy");
+  const [billingPostalCode, setBillingPostalCode] = useState(AMEX_BILLING_POSTAL_CODE_EXAMPLE);
 
   const [userSignOff, setUserSignOff] = useState<"" | "YES" | "NO">("");
   const [partnerMethod, setPartnerMethod] = useState<"" | "N" | "U">("");
@@ -67,6 +68,10 @@ export function GetCryptogram() {
       if (isAmex && (!userSignOff || !partnerMethod || !state.agentContext.llm_platform || !state.agentContext.agent_name.trim() || !txnUrl.trim())) {
         throw new Error("Provide agent platform, merchant URL, purchase approval and partner authentication outcome.");
       }
+      const deviceContext = state.amexDeviceContext;
+      if (isAmex && (!deviceContext || deviceContext.cardId !== state.cardId)) {
+        throw new Error("Enroll this card with device context before requesting an Amex credential.");
+      }
       // SCOF checkout is card-scoped with no intent; intent-style is
       // intent-scoped with a transaction-data cart.
       const query = isCardScoped
@@ -78,6 +83,8 @@ export function GetCryptogram() {
             transaction_amount: cardScopedAmount,
             transaction_currency_code: cardScopedCurrency,
             ...(isAmex ? {
+              ...paymentRiskAttributes(deviceContext!),
+              ...paymentBillingAttributes(billingPostalCode),
               merchant_url: txnUrl,
               agent: {
                 agent_name: state.agentContext.agent_name,
@@ -99,10 +106,16 @@ export function GetCryptogram() {
             }],
           };
 
-      const data = await api("POST", query, {
+      const result = await apiResponse<{ data?: { id?: string; attributes?: Record<string, unknown> }; error?: string; detail?: string }>("POST", query, {
         data: { type: "cryptograms", attributes },
       });
+      const data = result.body;
       setResponse(data);
+      if (!result.ok) {
+        log(`Step ${num}: API returned HTTP ${result.status} — ${data?.detail ?? data?.error ?? JSON.stringify(data)}`);
+        setLoading("cryptogram", false);
+        return;
+      }
       if (isAmex) {
         const outcome = paymentOutcome(data);
         if (outcome.challenge) {
@@ -222,6 +235,10 @@ export function GetCryptogram() {
           </>
         )}
         {isAmex && <>
+          <Field label="Billing postal code">
+            <input className="input" autoComplete="billing postal-code" value={billingPostalCode} onChange={(e) => setBillingPostalCode(e.target.value)} />
+          </Field>
+          <p className="text-xs text-gray-500 mt-2">Prefilled with the Amex example. Edit as needed; used when the stored card has no billing postal code.</p>
           <Field label="Merchant URL"><input className="input" value={txnUrl} onChange={(e) => setTxnUrl(e.target.value)} /></Field>
           <Field label="Agent name"><input className="input" value={state.agentContext.agent_name} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, agent_name: e.target.value } }))} /></Field>
           <Field label="Agent platform"><select className="input" value={state.agentContext.llm_platform ?? ""} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, llm_platform: e.target.value === "OPEN_AI" ? "OPEN_AI" : undefined } }))}><option value="">Select platform</option><option value="OPEN_AI">OpenAI</option></select></Field>

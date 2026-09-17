@@ -1,6 +1,30 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isEnrollmentAlreadyExists, deleteAmexEnrollment, AMEX_ENROLLMENT_EXAMPLE, enrollmentAttributes, paymentOutcome } from '../src/amex.ts';
+import { isEnrollmentAlreadyExists, deleteAmexEnrollment, AMEX_ENROLLMENT_EXAMPLE, AMEX_BILLING_POSTAL_CODE_EXAMPLE, enrollmentAttributes, paymentOutcome, paymentRiskAttributes, paymentBillingAttributes } from '../src/amex.ts';
+
+test('demo sends only the billing postal code and preserves leading zeros and cleared input', () => {
+  assert.deepEqual(paymentBillingAttributes(AMEX_BILLING_POSTAL_CODE_EXAMPLE), {
+    billing_address: { zip: '12345' },
+  });
+  assert.deepEqual(paymentBillingAttributes(' 02108 '), {
+    billing_address: { zip: '02108' },
+  });
+  assert.deepEqual(paymentBillingAttributes(' '), {});
+  assert.deepEqual(paymentBillingAttributes(''), {});
+});
+
+test('checkout forwards the supplied device context without enrollment-only account fields', () => {
+  const context = {
+    deviceId: 'current-device', ipAddress: '192.0.2.20', language: 'uk-UA',
+    formFactor: 'MOBILE', browserUserAgent: 'current browser',
+  };
+  assert.deepEqual(paymentRiskAttributes(context), {
+    device_id: 'current-device',
+    browser_data: { ipAddress: '192.0.2.20', browserLanguage: 'uk-UA', userAgent: 'current browser' },
+    risk: { account: { action_channel: 'WEB' }, device: { form_factor: 'MOBILE' } },
+  });
+  assert.throws(() => paymentRiskAttributes({ ...context, deviceId: ' ' }));
+});
 
 test('legacy Visa and Mastercard enrollment is unchanged', () => {
   assert.deepEqual(enrollmentAttributes('buyer@example.com'), { consumer_email: 'buyer@example.com' });
