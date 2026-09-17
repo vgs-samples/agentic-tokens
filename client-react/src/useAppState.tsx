@@ -18,6 +18,8 @@ import {
   type StepKey,
 } from "./flow";
 
+import { AMEX_ENROLLMENT_EXAMPLE } from "./amex";
+
 export type { CardholderVerification, Network, StepKey } from "./flow";
 
 export interface OtpContext {
@@ -26,6 +28,8 @@ export interface OtpContext {
 }
 
 export interface AppState {
+  agentContext: import("./amex").AgentContext;
+  consumerEmail: string;
   cardId: string | null;
   tokenId: string | null;
   intentId: string | null;
@@ -51,6 +55,8 @@ export interface AppState {
 
 function initialState(): AppState {
   return {
+    agentContext: { ...AMEX_ENROLLMENT_EXAMPLE.agent },
+    consumerEmail: "",
     cardId: null,
     tokenId: null,
     intentId: null,

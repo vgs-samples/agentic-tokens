@@ -20,7 +20,7 @@ for (const verification of [null, "passkey", "otp", "none"]) {
 
     test(`Amex ${verification ?? "legacy"} flow, enrollment=${enrollmentRequired}`, () => {
       assert.deepEqual(stepsFor("amex", verification, enrollmentRequired), [
-        "card", "enroll", ...(verification === "otp" ? ["idv"] : []), "cryptogram",
+        "card", "enroll", ...(verification === "otp" ? ["idv"] : []), "cryptogram", "deleteEnrollment",
       ]);
     });
   }
@@ -42,7 +42,7 @@ test("Amex enrollment selects OTP only when the API explicitly requests it", () 
       client_ref_id: "opaque-reference", stepUpRequest: [{ method: "OTPEMAIL", identifier: "channel" }],
     } },
   });
-  assert.deepEqual(stepsFor("amex", verification, agenticEnrollmentRequired), ["card", "enroll", "idv", "cryptogram"]);
+  assert.deepEqual(stepsFor("amex", verification, agenticEnrollmentRequired), ["card", "enroll", "idv", "cryptogram", "deleteEnrollment"]);
 });
 
 test("Visa can still fetch OTP methods and complete enrollment with the existing contract", async (t) => {

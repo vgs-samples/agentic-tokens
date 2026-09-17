@@ -9,6 +9,7 @@ import { CompleteEnrollment } from "./components/CompleteEnrollment";
 import { CreateIntent } from "./components/CreateIntent";
 import { GetCryptogram } from "./components/GetCryptogram";
 import { ConfirmTransaction } from "./components/ConfirmTransaction";
+import { DeleteEnrollment } from "./components/DeleteEnrollment";
 import { Log } from "./components/Log";
 
 export default function App() {
@@ -38,8 +39,9 @@ function AppContent() {
     idv: <CardholderIdv key={state.otpContext?.clientRefId ?? "visa"} consumerEmail={consumerEmail} />,
     agenticEnroll: <CompleteEnrollment consumerEmail={consumerEmail} />,
     intent: <CreateIntent />,
-    cryptogram: <GetCryptogram />,
+    cryptogram: <GetCryptogram key={`${state.network}:${state.cardId}:${state.tokenId}`} />,
     confirm: <ConfirmTransaction />,
+    deleteEnrollment: <DeleteEnrollment key={state.tokenId ?? "amex"} />,
   };
 
   return (

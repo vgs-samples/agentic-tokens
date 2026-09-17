@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useOtpInput } from "../useOtpInput";
 import { getStepUpOptions, idvErrorInfo, newClientRefId, requestOtp, submitOtp, type OtpMethod } from "../idv";
 import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
@@ -26,7 +27,7 @@ export function CardholderIdv({ consumerEmail }: Props) {
   const [visaMethods, setVisaMethods] = useState<OtpMethod[]>([]);
   const [selectedMethodIdentifier, setSelectedMethodIdentifier] = useState("");
   const [otpDelivered, setOtpDelivered] = useState(false);
-  const [otp, setOtp] = useState("");
+  const { otp, setOtp } = useOtpInput();
   const clientRefId = context?.clientRefId ?? visaClientRefId;
   const methods = context?.methods ?? visaMethods;
   const selectedIdentifier = methods.some(({ identifier }) => identifier === selectedMethodIdentifier)

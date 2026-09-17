@@ -60,6 +60,17 @@ app.post("/api/cards/:cardId/agentic-tokens", handler(async (req, res) => {
   res.status(status).json(data);
 }));
 
+// DELETE /api/amex-enrollments?enrollmentId= — user-requested ACE enrollment deletion.
+app.delete("/api/amex-enrollments", handler(async (req, res) => {
+  const enrollmentId = typeof req.query.enrollmentId === "string" ? req.query.enrollmentId.trim() : "";
+  if (!enrollmentId) return res.status(400).json({ error: "enrollmentId required" });
+  const { status, data } = await callVgs(
+    vgsConfig.apiUrl, "DELETE",
+    `/temporary/amex/agentic-tokens/${encodeURIComponent(enrollmentId)}`
+  );
+  res.status(status).json(data);
+}));
+
 // --- Cardholder ID&V (passkey-exempt vaults) ---
 // The browser drives these through this proxy; see client-react/src/idv.ts.
 

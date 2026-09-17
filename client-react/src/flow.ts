@@ -18,7 +18,8 @@ export type StepKey =
   | "agenticEnroll"
   | "intent"
   | "cryptogram"
-  | "confirm";
+  | "confirm"
+  | "deleteEnrollment";
 
 /**
  * How the cardholder must be verified, straight from the enroll response's
@@ -66,18 +67,18 @@ export function flowFromEnrollResponse(enrollResponse: any): {
 
 /**
  * Which optional phases of the flow each network runs. This is what replaced the old
- * fixed `FLOWS` table: only Visa has phases beyond the cryptogram, and which of *those*
- * run depends on the enroll response rather than the network alone.
+ * fixed `FLOWS` table. Visa confirmation and Amex enrollment deletion follow the cryptogram.
  *  - `enrollment`   — the post-enroll cardholder-verification / complete-enrollment phase.
  *  - `intent`       — spending intents ("verifiable intent" isn't enabled upstream for
  *    Mastercard SCOF or Amex ACE yet).
  *  - `confirmation` — reporting the outcome back (card-scoped checkout needs none).
+ *  - `deletion`     — optional user-triggered enrollment cleanup after payment.
  * See docs/temporary-mc-user-guide.md in the maranui repo for the Mastercard shape.
  */
-const NETWORK_PHASES: Record<Network, { enrollment: boolean; intent: boolean; confirmation: boolean }> = {
-  visa: { enrollment: true, intent: true, confirmation: true },
-  mastercard: { enrollment: false, intent: false, confirmation: false },
-  amex: { enrollment: false, intent: false, confirmation: false },
+const NETWORK_PHASES: Record<Network, { enrollment: boolean; intent: boolean; confirmation: boolean; deletion: boolean }> = {
+  visa: { enrollment: true, intent: true, confirmation: true, deletion: false },
+  mastercard: { enrollment: false, intent: false, confirmation: false, deletion: false },
+  amex: { enrollment: false, intent: false, confirmation: false, deletion: true },
 };
 
 /**
@@ -113,6 +114,7 @@ export function stepsFor(
   if (phases.intent) steps.push("intent");
   steps.push("cryptogram");
   if (phases.confirmation) steps.push("confirm");
+  if (phases.deletion) steps.push("deleteEnrollment");
   return steps;
 }
 
