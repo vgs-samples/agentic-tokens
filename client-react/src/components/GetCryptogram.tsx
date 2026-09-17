@@ -39,12 +39,13 @@ export function GetCryptogram() {
 
   // Mastercard SCOF and Amex ACE share amount and currency fields.
   const [cardScopedAmount, setCardScopedAmount] = useState("5.33");
-  const [cardScopedCurrency, setCardScopedCurrency] = useState("840");
+  const [cardScopedCurrency, setCardScopedCurrency] = useState<string>(CURRENCY_CODES[0].value);
   const [cardScopedMerchant, setCardScopedMerchant] = useState("Best Buy");
   const [billingPostalCode, setBillingPostalCode] = useState(AMEX_BILLING_POSTAL_CODE_EXAMPLE);
 
-  const [userSignOff, setUserSignOff] = useState<"" | "YES" | "NO">("");
-  const [partnerMethod, setPartnerMethod] = useState<"" | "N" | "U">("");
+  const agentPlatform = state.agentContext.llm_platform ?? "OPEN_AI";
+  const [userSignOff, setUserSignOff] = useState<"YES" | "NO">("YES");
+  const [partnerMethod, setPartnerMethod] = useState<"N" | "U">("N");
   const [challenge, setChallenge] = useState<PaymentChallenge | null>(null);
   const [selectedMethod, setSelectedMethod] = useState("");
   const { otp, setOtp, resetOtp } = useOtpInput();
@@ -65,8 +66,8 @@ export function GetCryptogram() {
     resetOtp();
     setOtpDelivered(false);
     try {
-      if (isAmex && (!userSignOff || !partnerMethod || !state.agentContext.llm_platform || !state.agentContext.agent_name.trim() || !txnUrl.trim())) {
-        throw new Error("Provide agent platform, merchant URL, purchase approval and partner authentication outcome.");
+      if (isAmex && (!state.agentContext.agent_name.trim() || !txnUrl.trim())) {
+        throw new Error("Provide agent name and merchant URL.");
       }
       const deviceContext = state.amexDeviceContext;
       if (isAmex && (!deviceContext || deviceContext.cardId !== state.cardId)) {
@@ -88,7 +89,7 @@ export function GetCryptogram() {
               merchant_url: txnUrl,
               agent: {
                 agent_name: state.agentContext.agent_name,
-                llm_platform: state.agentContext.llm_platform,
+                llm_platform: agentPlatform,
               },
               user_sign_off: userSignOff,
               partner_delegated_signoff: { partner_step_up_method: partnerMethod },
@@ -241,9 +242,9 @@ export function GetCryptogram() {
           <p className="text-xs text-gray-500 mt-2">Prefilled with the Amex example. Edit as needed; used when the stored card has no billing postal code.</p>
           <Field label="Merchant URL"><input className="input" value={txnUrl} onChange={(e) => setTxnUrl(e.target.value)} /></Field>
           <Field label="Agent name"><input className="input" value={state.agentContext.agent_name} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, agent_name: e.target.value } }))} /></Field>
-          <Field label="Agent platform"><select className="input" value={state.agentContext.llm_platform ?? ""} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, llm_platform: e.target.value === "OPEN_AI" ? "OPEN_AI" : undefined } }))}><option value="">Select platform</option><option value="OPEN_AI">OpenAI</option></select></Field>
-          <Field label="Cardholder approved this purchase"><select className="input" value={userSignOff} onChange={(e) => setUserSignOff(e.target.value as typeof userSignOff)}><option value="">Select approval</option><option value="YES">Yes</option><option value="NO">No</option></select></Field>
-          <Field label="Partner authentication"><select className="input" value={partnerMethod} onChange={(e) => setPartnerMethod(e.target.value as typeof partnerMethod)}><option value="">Select outcome</option><option value="N">No partner step-up (user not present)</option><option value="U">Unsuccessful partner step-up</option></select></Field>
+          <Field label="Agent platform"><select className="input" value={agentPlatform} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, llm_platform: e.target.value as typeof agentPlatform } }))}><option value="OPEN_AI">OpenAI</option></select></Field>
+          <Field label="Cardholder approved this purchase"><select className="input" value={userSignOff} onChange={(e) => setUserSignOff(e.target.value as typeof userSignOff)}><option value="YES">Yes</option><option value="NO">No</option></select></Field>
+          <Field label="Partner authentication"><select className="input" value={partnerMethod} onChange={(e) => setPartnerMethod(e.target.value as typeof partnerMethod)}><option value="N">No partner step-up (user not present)</option><option value="U">Unsuccessful partner step-up</option></select></Field>
           <p className="text-xs text-gray-500 mt-2">This demo does not perform partner SMS, device or passkey authentication. Amex may request its own verification.</p>
         </>}
         <Button onClick={handleGet} disabled={loading || Boolean(challenge)}>
