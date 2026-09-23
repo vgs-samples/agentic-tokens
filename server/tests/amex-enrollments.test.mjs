@@ -71,7 +71,7 @@ test('Docker and Netlify deletion proxies preserve IDs, request body and upstrea
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), deleted(id));
       assert.deepEqual(calls.at(-1), {
-        method: 'DELETE', path: `/temporary/amex/agentic-tokens/${encodeURIComponent(id)}`, body: '',
+        method: 'DELETE', path: `/agentic-tokens/${encodeURIComponent(id)}`, body: '',
       });
       const failure = await request('?enrollmentId=rejected');
       assert.equal(failure.status, 409);

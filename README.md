@@ -55,11 +55,18 @@ Both flows above are Visa. Mastercard runs Create Card → Enroll Token → Chec
 
 Each step auto-populates IDs into the next step.
 
-After Amex returns a payment credential, **Delete Enrollment** appears as the final
-step. Its editable ID defaults to the latest enrollment in the current flow. Click
-**Delete Enrollment** to delete that enrollment or paste another ID. The demo shows
-the API response and only marks deletion complete when the API confirms `deleted`.
-Docker and Netlify proxy this action to `DELETE /temporary/amex/agentic-tokens/{enrollmentId}`.
+After a successful Amex enrollment, a separate **Unenrollment (Amex)** block is
+available below the payment step, without requesting a payment credential first.
+It starts collapsed and opens only when its header is clicked; enrollment still
+advances to OTP verification or payment credentials as usual. The editable ID defaults
+to the latest enrollment. Open the block and click **Unenroll** to delete it, or paste
+another ID. The block shows the HTTP status and response body, which remain visible
+after deletion. Once the API confirms `deleted` for the current enrollment, the demo
+clears its dependent flow state and returns to Enroll so the same stored card can be
+enrolled again. A failed deletion preserves the enrollment. Each new enrollment resets
+and collapses the Unenrollment block.
+Docker and Netlify proxy this action to `DELETE /agentic-tokens/{token_id}`,
+where `token_id` is the Amex enrollment ID returned as `data.id` during enrollment.
 
 If Amex enrollment returns HTTP `409` with `detail: "Enrollment already exists."`,
 the Enroll step also offers an editable enrollment ID and **Delete Enrollment**.

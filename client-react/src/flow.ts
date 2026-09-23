@@ -67,12 +67,12 @@ export function flowFromEnrollResponse(enrollResponse: any): {
 
 /**
  * Which optional phases of the flow each network runs. This is what replaced the old
- * fixed `FLOWS` table. Visa confirmation and Amex enrollment deletion follow the cryptogram.
+ * fixed `FLOWS` table. Visa confirmation follows the cryptogram; Amex also shows a manual cleanup block.
  *  - `enrollment`   — the post-enroll cardholder-verification / complete-enrollment phase.
  *  - `intent`       — spending intents ("verifiable intent" isn't enabled upstream for
  *    Mastercard SCOF or Amex ACE yet).
  *  - `confirmation` — reporting the outcome back (card-scoped checkout needs none).
- *  - `deletion`     — optional user-triggered enrollment cleanup after payment.
+ *  - `deletion`     — optional user-triggered cleanup, available as soon as enrollment succeeds.
  * See docs/temporary-mc-user-guide.md in the maranui repo for the Mastercard shape.
  */
 const NETWORK_PHASES: Record<Network, { enrollment: boolean; intent: boolean; confirmation: boolean; deletion: boolean }> = {

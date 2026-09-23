@@ -66,7 +66,7 @@ app.delete("/api/amex-enrollments", handler(async (req, res) => {
   if (!enrollmentId) return res.status(400).json({ error: "enrollmentId required" });
   const { status, data } = await callVgs(
     vgsConfig.apiUrl, "DELETE",
-    `/temporary/amex/agentic-tokens/${encodeURIComponent(enrollmentId)}`
+    `/agentic-tokens/${encodeURIComponent(enrollmentId)}`
   );
   res.status(status).json(data);
 }));

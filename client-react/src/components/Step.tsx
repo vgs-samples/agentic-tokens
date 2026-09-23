@@ -7,16 +7,20 @@ interface StepProps {
   children: ReactNode;
   response?: unknown;
   responseMeta?: string | null;
+  manual?: boolean;
 }
 
-export function Step({ stepKey, title, children, response, responseMeta }: StepProps) {
+export function Step({ stepKey, title, children, response, responseMeta, manual = false }: StepProps) {
   const { goToStep } = useAppState();
   const { active, done, loading, disabled, num } = useStepStatus(stepKey);
   const [collapsed, setCollapsed] = useState(false);
-  const open = active && !collapsed;
+  const [manuallyOpen, setManuallyOpen] = useState(false);
+  const open = manual ? manuallyOpen : active && !collapsed;
 
   function handleHeaderClick() {
-    if (active) {
+    if (manual) {
+      setManuallyOpen((value) => !value);
+    } else if (active) {
       setCollapsed((c) => !c);
     } else {
       goToStep(stepKey);
@@ -34,16 +38,18 @@ export function Step({ stepKey, title, children, response, responseMeta }: StepP
   return (
     <div className={[
       "bg-white border rounded-lg mb-3 overflow-visible",
-      disabled ? "opacity-60" : "",
+      disabled && !manual ? "opacity-60" : "",
       done ? "border-green-500" : "border-gray-300",
     ].join(" ")}>
-      <div
-        className="flex items-center gap-2.5 px-4 py-3.5 cursor-pointer select-none font-semibold"
+      <button
+        type="button"
+        aria-expanded={open}
+        className="flex w-full items-center gap-2.5 px-4 py-3.5 cursor-pointer select-none text-left font-semibold"
         onClick={handleHeaderClick}
       >
-        <span className={numClasses}>{loading ? "" : num}</span>
+        <span className={numClasses}>{loading ? "" : manual ? (open ? "−" : "+") : num}</span>
         {title}
-      </div>
+      </button>
       {open && (
         <div className="px-4 pb-4 space-y-2">
           {children}
