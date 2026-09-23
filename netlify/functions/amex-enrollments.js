@@ -8,7 +8,7 @@ export default wrap(async (req) => {
   if (!enrollmentId) return json(400, { error: "enrollmentId required" });
   const { status, data } = await callVgs(
     config.apiUrl, "DELETE",
-    `/temporary/amex/agentic-tokens/${encodeURIComponent(enrollmentId)}`
+    `/agentic-tokens/${encodeURIComponent(enrollmentId)}`
   );
   return json(status, data);
 });

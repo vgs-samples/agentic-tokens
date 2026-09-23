@@ -76,6 +76,7 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
           : null;
         setState((s) => ({
           ...s, tokenId, network, otpContext, consumerEmail,
+          completedSteps: new Set([...s.completedSteps].filter((step) => step !== "deleteEnrollment")),
           amexDeviceContext: isAmex && state.cardId ? {
             cardId: state.cardId, deviceId, ipAddress, formFactor,
             language: navigator.language, browserUserAgent: navigator.userAgent,
@@ -108,9 +109,10 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
     }
   }
 
-  async function handleDeleteExistingEnrollment() {
-    const id = conflictEnrollmentId.trim();
-    if (!showConflictDeletion || !id || loading) return;
+  async function handleDeleteEnrollment(enrollmentId: string) {
+    const id = enrollmentId.trim();
+    if (!isAmex || !id || state.loadingSteps.size > 0) return;
+    setState((s) => ({ ...s, activeStep: "enroll" }));
     setLoading("enroll", true);
     setDeletedEnrollmentId(null);
     log(`Step ${num}: Deleting existing Amex enrollment ${id}...`);
@@ -120,6 +122,18 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
       setResponseMeta(`Delete enrollment · HTTP ${result.status}`);
       if (result.ok && result.body?.data?.id === id && result.body.data.attributes?.status === "deleted") {
         setDeletedEnrollmentId(id);
+        setState((s) => s.tokenId !== id ? s : {
+          ...s,
+          tokenId: null,
+          intentId: null,
+          assuranceData: null,
+          otpContext: null,
+          amexDeviceContext: null,
+          cardholderVerification: null,
+          agenticEnrollmentRequired: false,
+          completedSteps: new Set([...s.completedSteps].filter((step) => step === "card")),
+          activeStep: "enroll",
+        });
         log(`Step ${num}: Enrollment deleted — ${id}. Retry enrollment.`);
       } else {
         log(`Step ${num}: Deletion not confirmed — HTTP ${result.status}`);
@@ -154,15 +168,15 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
         <p className="text-xs text-gray-500 mt-2">Prefilled with sample account, device and agent details from the ACE 1.1 spec. You can edit them before enrolling. Browser language and user agent come from this browser.</p>
       </>}
       <Button onClick={handleEnroll} disabled={loading}>Enroll</Button>
+      {deletedEnrollmentId && <p className="text-sm text-green-700">Enrollment {deletedEnrollmentId} deleted. Click Enroll to try again.</p>}
       {showConflictDeletion && <div className="mt-3 border-t border-gray-200 pt-2">
         <Field label="Existing enrollment ID">
           <input className="input" value={conflictEnrollmentId} disabled={loading} onChange={(e) => setConflictEnrollmentId(e.target.value)} />
         </Field>
         <p className="text-xs text-gray-500">The API did not return the existing enrollment ID. This field uses the latest ID from this flow when available; replace it with the enrollment ID you want to delete.</p>
-        <Button onClick={handleDeleteExistingEnrollment} disabled={loading || !conflictEnrollmentId.trim() || deletedEnrollmentId === conflictEnrollmentId.trim()}>
+        <Button onClick={() => handleDeleteEnrollment(conflictEnrollmentId)} disabled={state.loadingSteps.size > 0 || !conflictEnrollmentId.trim() || deletedEnrollmentId === conflictEnrollmentId.trim()}>
           Delete Enrollment
         </Button>
-        {deletedEnrollmentId && <p className="text-sm text-green-700">Enrollment {deletedEnrollmentId} deleted. Click Enroll to try again.</p>}
       </div>}
     </Step>
   );

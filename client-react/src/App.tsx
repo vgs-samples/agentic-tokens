@@ -41,7 +41,7 @@ function AppContent() {
     intent: <CreateIntent />,
     cryptogram: <GetCryptogram key={`${state.network}:${state.cardId}:${state.tokenId}`} />,
     confirm: <ConfirmTransaction />,
-    deleteEnrollment: <DeleteEnrollment key={state.tokenId ?? "amex"} />,
+    deleteEnrollment: <DeleteEnrollment key={state.cardId ?? "amex"} />,
   };
 
   return (

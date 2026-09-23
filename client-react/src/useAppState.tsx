@@ -119,8 +119,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       loading.delete(step);
       const flow = stepsFor(s.network, s.cardholderVerification, s.agenticEnrollmentRequired);
       const idx = flow.indexOf(step);
-      // Advance to the next step in the active flow; stay put on the last step.
-      const next = idx >= 0 && idx + 1 < flow.length ? flow[idx + 1] : step;
+      // Unenrollment is optional and opened manually, never an automatic next step.
+      const candidate = idx >= 0 ? flow[idx + 1] : undefined;
+      const next = candidate && candidate !== "deleteEnrollment" ? candidate : step;
       return {
         ...s,
         completedSteps: completed,
