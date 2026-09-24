@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useOtpInput } from "../useOtpInput";
-import { AMEX_BILLING_POSTAL_CODE_EXAMPLE, paymentBillingAttributes, paymentOutcome, paymentRiskAttributes, type PaymentChallenge } from "../amex";
+import { paymentOutcome, paymentRiskAttributes, type PaymentChallenge } from "../amex";
 import { requestOtp, submitOtp } from "../idv";
 import { apiResponse } from "../api";
 import { useAppState, useStepStatus } from "../useAppState";
@@ -41,7 +41,6 @@ export function GetCryptogram() {
   const [cardScopedAmount, setCardScopedAmount] = useState("5.33");
   const [cardScopedCurrency, setCardScopedCurrency] = useState<string>(CURRENCY_CODES[0].value);
   const [cardScopedMerchant, setCardScopedMerchant] = useState("Best Buy");
-  const [billingPostalCode, setBillingPostalCode] = useState(AMEX_BILLING_POSTAL_CODE_EXAMPLE);
 
   const agentPlatform = state.agentContext.llm_platform ?? "OPEN_AI";
   const [userSignOff, setUserSignOff] = useState<"YES" | "NO">("YES");
@@ -85,7 +84,6 @@ export function GetCryptogram() {
             transaction_currency_code: cardScopedCurrency,
             ...(isAmex ? {
               ...paymentRiskAttributes(deviceContext!),
-              ...paymentBillingAttributes(billingPostalCode),
               merchant_url: txnUrl,
               agent: {
                 agent_name: state.agentContext.agent_name,
@@ -236,10 +234,6 @@ export function GetCryptogram() {
           </>
         )}
         {isAmex && <>
-          <Field label="Billing postal code">
-            <input className="input" autoComplete="billing postal-code" value={billingPostalCode} onChange={(e) => setBillingPostalCode(e.target.value)} />
-          </Field>
-          <p className="text-xs text-gray-500 mt-2">Prefilled with the Amex example. Edit as needed; used when the stored card has no billing postal code.</p>
           <Field label="Merchant URL"><input className="input" value={txnUrl} onChange={(e) => setTxnUrl(e.target.value)} /></Field>
           <Field label="Agent name"><input className="input" value={state.agentContext.agent_name} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, agent_name: e.target.value } }))} /></Field>
           <Field label="Agent platform"><select className="input" value={agentPlatform} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, llm_platform: e.target.value as typeof agentPlatform } }))}><option value="OPEN_AI">OpenAI</option></select></Field>

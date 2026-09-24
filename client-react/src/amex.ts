@@ -61,14 +61,6 @@ export interface PaymentChallenge {
   methods: Array<{ method: string; identifier: string; value?: string }>;
 }
 
-// Demo prefill from ACE 1.1; Maranui never supplies an example postal code.
-export const AMEX_BILLING_POSTAL_CODE_EXAMPLE = "12345";
-
-export function paymentBillingAttributes(postalCode: string) {
-  const zip = postalCode.trim();
-  return zip ? { billing_address: { zip } } : {};
-}
-
 export type PaymentDeviceContext = Pick<EnrollmentContext,
   "deviceId" | "ipAddress" | "language" | "formFactor" | "browserUserAgent">;
 

@@ -1,17 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isEnrollmentAlreadyExists, deleteAmexEnrollment, AMEX_ENROLLMENT_EXAMPLE, AMEX_BILLING_POSTAL_CODE_EXAMPLE, enrollmentAttributes, paymentOutcome, paymentRiskAttributes, paymentBillingAttributes } from '../src/amex.ts';
-
-test('demo sends only the billing postal code and preserves leading zeros and cleared input', () => {
-  assert.deepEqual(paymentBillingAttributes(AMEX_BILLING_POSTAL_CODE_EXAMPLE), {
-    billing_address: { zip: '12345' },
-  });
-  assert.deepEqual(paymentBillingAttributes(' 02108 '), {
-    billing_address: { zip: '02108' },
-  });
-  assert.deepEqual(paymentBillingAttributes(' '), {});
-  assert.deepEqual(paymentBillingAttributes(''), {});
-});
+import { isEnrollmentAlreadyExists, deleteAmexEnrollment, AMEX_ENROLLMENT_EXAMPLE, enrollmentAttributes, paymentOutcome, paymentRiskAttributes } from '../src/amex.ts';
 
 test('checkout forwards the supplied device context without enrollment-only account fields', () => {
   const context = {
