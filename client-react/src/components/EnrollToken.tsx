@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AMEX_ENROLLMENT_EXAMPLE, deleteAmexEnrollment, enrollmentAttributes, isEnrollmentAlreadyExists } from "../amex";
+import { AMEX_ENROLLMENT_EXAMPLE, deleteAmexEnrollment, enrollmentAttributes, isEnrollmentAlreadyExists, type DeviceType } from "../amex";
 import { apiResponse } from "../api";
 import { useAppState, useStepStatus } from "../useAppState";
 import { flowFromEnrollResponse, reconcileNetwork } from "../flow";
@@ -34,8 +34,9 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
   const [lastName, setLastName] = useState(AMEX_ENROLLMENT_EXAMPLE.lastName);
   const [deviceId, setDeviceId] = useState(AMEX_ENROLLMENT_EXAMPLE.deviceId);
   const [ipAddress, setIpAddress] = useState(AMEX_ENROLLMENT_EXAMPLE.ipAddress);
-  const [nameCount, setNameCount] = useState(AMEX_ENROLLMENT_EXAMPLE.distinctBillingLastNameCount);
   const [formFactor, setFormFactor] = useState(AMEX_ENROLLMENT_EXAMPLE.formFactor);
+  const [nameCount, setNameCount] = useState(AMEX_ENROLLMENT_EXAMPLE.distinctBillingLastNameCount);
+  const [deviceType, setDeviceType] = useState<DeviceType | "">(AMEX_ENROLLMENT_EXAMPLE.deviceType ?? "");
   const isAmex = state.network === "amex";
   const [conflictCardId, setConflictCardId] = useState<string | null>(null);
   const [conflictEnrollmentId, setConflictEnrollmentId] = useState("");
@@ -52,9 +53,9 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
         data: {
           type: "agentic_tokens",
           attributes: enrollmentAttributes(consumerEmail, isAmex ? {
-            consumerId, firstName, lastName, deviceId, ipAddress, distinctBillingLastNameCount: nameCount,
-            language: navigator.language, browserUserAgent: navigator.userAgent,
-            formFactor, agent: state.agentContext,
+            consumerId, firstName, lastName, deviceId, ipAddress, language: navigator.language,
+            formFactor, distinctBillingLastNameCount: nameCount,
+            deviceType: deviceType || undefined, agent: state.agentContext,
           } : undefined),
         },
       });
@@ -79,7 +80,7 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
           completedSteps: new Set([...s.completedSteps].filter((step) => step !== "deleteEnrollment")),
           amexDeviceContext: isAmex && state.cardId ? {
             cardId: state.cardId, deviceId, ipAddress, formFactor,
-            language: navigator.language, browserUserAgent: navigator.userAgent,
+            deviceType: deviceType || undefined, language: navigator.language,
           } : null,
         }));
         log(`Step ${num}: Token enrolled — ${tokenId} (${network})`);
@@ -150,27 +151,28 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
 
   return (
     <Step stepKey="enroll" title="Enroll Agentic Token" response={response} responseMeta={responseMeta}>
-      <Field label="Card ID">
+      <Field label="Card ID (required)">
         <input className="input" value={state.cardId ?? ""} onChange={(e) => setState((s) => ({ ...s, cardId: e.target.value }))} />
       </Field>
-      <Field label="Consumer Email">
+      <Field label="Consumer Email (required)">
         <input className="input" value={consumerEmail} onChange={(e) => setConsumerEmail(e.target.value)} />
       </Field>
       {isAmex && <>
+        <Field label="Cardholder first name (required)"><input className="input" value={firstName} onChange={(e) => setFirstName(e.target.value)} /></Field>
+        <Field label="Cardholder last name (required)"><input className="input" value={lastName} onChange={(e) => setLastName(e.target.value)} /></Field>
+        <Field label="Agent name (required)"><input className="input" value={state.agentContext.agent_name} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, agent_name: e.target.value } }))} /></Field>
+        <Field label="Device ID (required)"><input className="input" value={deviceId} onChange={(e) => setDeviceId(e.target.value)} /></Field>
+        <Field label="Device IP address (required)"><input className="input" value={ipAddress} onChange={(e) => setIpAddress(e.target.value)} /></Field>
+        <Field label="Device form factor (required)"><select className="input" value={formFactor} onChange={(e) => setFormFactor(e.target.value)}><option value="">Select device</option><option value="DESKTOP">Desktop</option><option value="MOBILE">Mobile</option><option value="TABLET">Tablet</option></select></Field>
+        <Field label="Distinct billing last names on the account (required)"><input className="input" inputMode="numeric" value={nameCount} onChange={(e) => setNameCount(e.target.value)} /></Field>
         <Field label="Consumer account ID (optional)"><input className="input" value={consumerId} onChange={(e) => setConsumerId(e.target.value)} /></Field>
-        <Field label="Cardholder first name"><input className="input" value={firstName} onChange={(e) => setFirstName(e.target.value)} /></Field>
-        <Field label="Cardholder last name"><input className="input" value={lastName} onChange={(e) => setLastName(e.target.value)} /></Field>
-        <Field label="Agent name"><input className="input" value={state.agentContext.agent_name} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, agent_name: e.target.value } }))} /></Field>
-        <Field label="Device ID"><input className="input" value={deviceId} onChange={(e) => setDeviceId(e.target.value)} /></Field>
-        <Field label="Device IP address"><input className="input" value={ipAddress} onChange={(e) => setIpAddress(e.target.value)} /></Field>
-        <Field label="Device form factor"><select className="input" value={formFactor} onChange={(e) => setFormFactor(e.target.value)}><option value="">Select device</option><option value="DESKTOP">Desktop</option><option value="MOBILE">Mobile</option><option value="TABLET">Tablet</option></select></Field>
-        <Field label="Distinct billing last names on the account"><input className="input" inputMode="numeric" value={nameCount} onChange={(e) => setNameCount(e.target.value)} /></Field>
-        <p className="text-xs text-gray-500 mt-2">Prefilled with sample account, device and agent details from the ACE 1.1 spec. You can edit them before enrolling. Browser language and user agent come from this browser.</p>
+        <Field label="Device type (optional)"><select className="input" value={deviceType} onChange={(e) => setDeviceType(e.target.value as DeviceType | "")}><option value="">Do not send</option><option value="Phone">Phone</option><option value="Tablet">Tablet</option><option value="Watch">Watch</option><option value="Wearable">Wearable</option><option value="Other">Other</option></select></Field>
+        <p className="text-xs text-gray-500 mt-2">Prefilled with sample account, device and agent details from the ACE 1.1 spec. You can edit them before enrolling. Browser language comes from this browser. Device type is saved and reused for Amex checkout.</p>
       </>}
       <Button onClick={handleEnroll} disabled={loading}>Enroll</Button>
       {deletedEnrollmentId && <p className="text-sm text-green-700">Enrollment {deletedEnrollmentId} deleted. Click Enroll to try again.</p>}
       {showConflictDeletion && <div className="mt-3 border-t border-gray-200 pt-2">
-        <Field label="Existing enrollment ID">
+        <Field label="Existing enrollment ID (required)">
           <input className="input" value={conflictEnrollmentId} disabled={loading} onChange={(e) => setConflictEnrollmentId(e.target.value)} />
         </Field>
         <p className="text-xs text-gray-500">The API did not return the existing enrollment ID. This field uses the latest ID from this flow when available; replace it with the enrollment ID you want to delete.</p>

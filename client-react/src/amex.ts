@@ -7,6 +7,8 @@ export interface AgentContext {
   llm_version?: string;
 }
 
+export type DeviceType = "Phone" | "Tablet" | "Watch" | "Wearable" | "Other";
+
 export interface EnrollmentContext {
   consumerId?: string;
   firstName: string;
@@ -15,15 +17,15 @@ export interface EnrollmentContext {
   ipAddress: string;
   language: string;
   formFactor: string;
-  browserUserAgent: string;
   distinctBillingLastNameCount: string;
+  deviceType?: DeviceType;
   agent: AgentContext;
 }
 
 // ACE-OAI-1.1_v6.yaml: decryptedEnrollmentRequestPayload example.
 // The example's AI_PLATFORM is not in the schema enum; leave the optional platform
 // unset here so checkout can collect a supported platform explicitly.
-export const AMEX_ENROLLMENT_EXAMPLE: Omit<EnrollmentContext, "language" | "browserUserAgent"> = {
+export const AMEX_ENROLLMENT_EXAMPLE: Omit<EnrollmentContext, "language"> = {
   consumerId: "user-12345",
   firstName: "Jane",
   lastName: "Jones",
@@ -31,6 +33,7 @@ export const AMEX_ENROLLMENT_EXAMPLE: Omit<EnrollmentContext, "language" | "brow
   ipAddress: "192.168.1.1",
   formFactor: "MOBILE",
   distinctBillingLastNameCount: "2",
+  deviceType: "Phone",
   agent: { agent_name: "NexusAI", llm_version: "gpt-4.1" },
 };
 
@@ -44,14 +47,21 @@ export function enrollmentAttributes(consumerEmail: string, context?: Enrollment
   return {
     consumer_email: consumerEmail,
     ...(context.consumerId?.trim() ? { consumer_id: context.consumerId.trim() } : {}),
-    consumer_first_name: context.firstName.trim(), consumer_last_name: context.lastName.trim(),
+    consumer_first_name: context.firstName.trim(),
+    consumer_last_name: context.lastName.trim(),
     device_id: context.deviceId,
     agents: [context.agent],
-    browser_data: { ipAddress: context.ipAddress.trim(), browserLanguage: context.language, userAgent: context.browserUserAgent },
+    browser_data: { ipAddress: context.ipAddress.trim(), browserLanguage: context.language },
     risk: {
-      account: { action_channel: "WEB", fpan_source: "ONFILE",
-        distinct_billing_last_name_count: context.distinctBillingLastNameCount },
-      device: { form_factor: context.formFactor },
+      account: {
+        action_channel: "WEB",
+        fpan_source: "ONFILE",
+        distinct_billing_last_name_count: context.distinctBillingLastNameCount,
+      },
+      device: {
+        form_factor: context.formFactor,
+        ...(context.deviceType ? { device_type: context.deviceType } : {}),
+      },
     },
   };
 }
@@ -62,7 +72,7 @@ export interface PaymentChallenge {
 }
 
 export type PaymentDeviceContext = Pick<EnrollmentContext,
-  "deviceId" | "ipAddress" | "language" | "formFactor" | "browserUserAgent">;
+  "deviceId" | "ipAddress" | "language" | "formFactor" | "deviceType">;
 
 export function paymentRiskAttributes(context: PaymentDeviceContext) {
   if ([context.deviceId, context.ipAddress, context.language, context.formFactor].some((value) => !value.trim())) {
@@ -71,9 +81,15 @@ export function paymentRiskAttributes(context: PaymentDeviceContext) {
   return {
     device_id: context.deviceId,
     browser_data: {
-      ipAddress: context.ipAddress.trim(), browserLanguage: context.language, userAgent: context.browserUserAgent,
+      ipAddress: context.ipAddress.trim(), browserLanguage: context.language,
     },
-    risk: { account: { action_channel: "WEB" }, device: { form_factor: context.formFactor } },
+    risk: {
+      account: { action_channel: "WEB" },
+      device: {
+        form_factor: context.formFactor,
+        ...(context.deviceType ? { device_type: context.deviceType } : {}),
+      },
+    },
   };
 }
 

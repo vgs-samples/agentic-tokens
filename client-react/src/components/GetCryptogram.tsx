@@ -185,14 +185,14 @@ export function GetCryptogram() {
       <Step stepKey="cryptogram" title={title} response={response}>
         {isCardScoped ? (
           <>
-            <Field label={isAmex ? "Enrollment ID" : "Token ID"}>
+            <Field label={`${isAmex ? "Enrollment ID" : "Token ID"} (required)`}>
               <input className="input" readOnly value={state.tokenId ?? ""} />
             </Field>
             <Row>
-              <Field label="Transaction Amount">
+              <Field label={`Transaction Amount (${isAmex ? "required" : "optional"})`}>
                 <input className="input" value={cardScopedAmount} onChange={(e) => setCardScopedAmount(e.target.value)} />
               </Field>
-              <Field label="Currency">
+              <Field label={`Currency (${isAmex ? "required" : "optional; required with amount"})`}>
                 <select className="input" value={cardScopedCurrency} onChange={(e) => setCardScopedCurrency(e.target.value)}>
                   {CURRENCY_CODES.map((currency) => (
                     <option key={currency.value} value={currency.value}>{currency.label}</option>
@@ -200,7 +200,7 @@ export function GetCryptogram() {
                 </select>
               </Field>
             </Row>
-            {!isAmex && <Field label="Merchant Name">
+            {!isAmex && <Field label="Merchant Name (optional)">
               <input className="input" value={cardScopedMerchant} onChange={(e) => setCardScopedMerchant(e.target.value)} />
             </Field>}
             <p className="text-xs text-gray-500 mt-1">
@@ -209,48 +209,48 @@ export function GetCryptogram() {
           </>
         ) : (
           <>
-            <Field label="Intent ID">
+            <Field label="Intent ID (required)">
               <input className="input" readOnly value={state.intentId ?? ""} />
             </Field>
             <Row>
-              <Field label="Transaction Amount">
+              <Field label="Transaction Amount (required)">
                 <input className="input" value={txnAmount} onChange={(e) => setTxnAmount(e.target.value)} />
               </Field>
-              <Field label="Currency">
+              <Field label="Currency (required)">
                 <input className="input" value={txnCurrency} onChange={(e) => setTxnCurrency(e.target.value)} />
               </Field>
             </Row>
             <Row>
-              <Field label="Merchant Name">
+              <Field label="Merchant Name (required)">
                 <input className="input" value={txnMerchant} onChange={(e) => setTxnMerchant(e.target.value)} />
               </Field>
-              <Field label="Merchant Country">
+              <Field label="Merchant Country (required)">
                 <input className="input" value={txnCountry} onChange={(e) => setTxnCountry(e.target.value)} />
               </Field>
             </Row>
-            <Field label="Merchant URL">
+            <Field label="Merchant URL (required)">
               <input className="input" value={txnUrl} onChange={(e) => setTxnUrl(e.target.value)} />
             </Field>
           </>
         )}
         {isAmex && <>
-          <Field label="Merchant URL"><input className="input" value={txnUrl} onChange={(e) => setTxnUrl(e.target.value)} /></Field>
-          <Field label="Agent name"><input className="input" value={state.agentContext.agent_name} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, agent_name: e.target.value } }))} /></Field>
-          <Field label="Agent platform"><select className="input" value={agentPlatform} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, llm_platform: e.target.value as typeof agentPlatform } }))}><option value="OPEN_AI">OpenAI</option></select></Field>
-          <Field label="Cardholder approved this purchase"><select className="input" value={userSignOff} onChange={(e) => setUserSignOff(e.target.value as typeof userSignOff)}><option value="YES">Yes</option><option value="NO">No</option></select></Field>
-          <Field label="Partner authentication"><select className="input" value={partnerMethod} onChange={(e) => setPartnerMethod(e.target.value as typeof partnerMethod)}><option value="N">No partner step-up (user not present)</option><option value="U">Unsuccessful partner step-up</option></select></Field>
-          <p className="text-xs text-gray-500 mt-2">This demo does not perform partner SMS, device or passkey authentication. Amex may request its own verification.</p>
+          <Field label="Merchant URL (required)"><input className="input" value={txnUrl} onChange={(e) => setTxnUrl(e.target.value)} /></Field>
+          <Field label="Agent name (required)"><input className="input" value={state.agentContext.agent_name} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, agent_name: e.target.value } }))} /></Field>
+          <Field label="Agent platform (required)"><select className="input" value={agentPlatform} onChange={(e) => setState((s) => ({ ...s, agentContext: { ...s.agentContext, llm_platform: e.target.value as typeof agentPlatform } }))}><option value="OPEN_AI">OpenAI</option></select></Field>
+          <Field label="Cardholder approved this purchase (required)"><select className="input" value={userSignOff} onChange={(e) => setUserSignOff(e.target.value as typeof userSignOff)}><option value="YES">Yes</option><option value="NO">No</option></select></Field>
+          <Field label="Partner authentication (required)"><select className="input" value={partnerMethod} onChange={(e) => setPartnerMethod(e.target.value as typeof partnerMethod)}><option value="N">No partner step-up (user not present)</option><option value="U">Unsuccessful partner step-up</option></select></Field>
+          <p className="text-xs text-gray-500 mt-2">This demo does not perform partner SMS, device or passkey authentication. Amex may request its own verification. The required device context and optional device type are reused from enrollment.</p>
         </>}
         <Button onClick={handleGet} disabled={loading || Boolean(challenge)}>
           {isAmex ? "Get Credential" : isScof ? "Checkout" : "Get Cryptogram"}
         </Button>
         {challenge && <>
-          <Field label="Payment verification method"><select className="input" value={selectedMethod} onChange={(e) => { setSelectedMethod(e.target.value); setOtpDelivered(false); resetOtp(); }}>
+          <Field label="Payment verification method (required)"><select className="input" value={selectedMethod} onChange={(e) => { setSelectedMethod(e.target.value); setOtpDelivered(false); resetOtp(); }}>
             {challenge.methods.map((method) => <option key={method.identifier} value={method.identifier}>{method.method} {method.value}</option>)}
           </select></Field>
           <Button onClick={() => void handlePaymentOtp(false)} disabled={loading}>{otpDelivered ? "Resend code" : "Send code"}</Button>
           {otpDelivered && <>
-            <Field label="Payment verification code"><input className="input" autoComplete="one-time-code" value={otp} onChange={(e) => setOtp(e.target.value)} /></Field>
+            <Field label="Payment verification code (required)"><input className="input" autoComplete="one-time-code" value={otp} onChange={(e) => setOtp(e.target.value)} /></Field>
             <Button onClick={() => void handlePaymentOtp(true)} disabled={loading || !otp.trim()}>Verify payment</Button>
           </>}
           <Button variant="secondary" onClick={() => { setChallenge(null); resetOtp(); setOtpDelivered(false); }} disabled={loading}>Discard pending attempt</Button>

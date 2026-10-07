@@ -5,35 +5,46 @@ import { isEnrollmentAlreadyExists, deleteAmexEnrollment, AMEX_ENROLLMENT_EXAMPL
 test('checkout forwards the supplied device context without enrollment-only account fields', () => {
   const context = {
     deviceId: 'current-device', ipAddress: '192.0.2.20', language: 'uk-UA',
-    formFactor: 'MOBILE', browserUserAgent: 'current browser',
+    formFactor: 'MOBILE', deviceType: 'Phone',
   };
   assert.deepEqual(paymentRiskAttributes(context), {
     device_id: 'current-device',
-    browser_data: { ipAddress: '192.0.2.20', browserLanguage: 'uk-UA', userAgent: 'current browser' },
-    risk: { account: { action_channel: 'WEB' }, device: { form_factor: 'MOBILE' } },
+    browser_data: { ipAddress: '192.0.2.20', browserLanguage: 'uk-UA' },
+    risk: { account: { action_channel: 'WEB' }, device: { form_factor: 'MOBILE', device_type: 'Phone' } },
   });
+  const withoutDeviceType = paymentRiskAttributes({ ...context, deviceType: undefined });
+  assert.equal('device_type' in withoutDeviceType.risk.device, false);
   assert.throws(() => paymentRiskAttributes({ ...context, deviceId: ' ' }));
 });
 
 test('legacy Visa and Mastercard enrollment is unchanged', () => {
   assert.deepEqual(enrollmentAttributes('buyer@example.com'), { consumer_email: 'buyer@example.com' });
 });
-test('Amex reuses email/device identifiers and forwards actual risk and names', () => {
+test('Amex reuses email/device identifiers and forwards actual risk and first name', () => {
   const attrs = enrollmentAttributes('buyer@example.com', {
     firstName: ' Jane ', lastName: 'Doe', deviceId: 'device', ipAddress: '192.0.2.1',
-    language: 'en-US', formFactor: 'DESKTOP', browserUserAgent: 'test browser',
-    distinctBillingLastNameCount: '1', agent: { agent_name: 'Demo' },
+    language: 'en-US', formFactor: 'DESKTOP', distinctBillingLastNameCount: '1',
+    deviceType: 'Tablet', agent: { agent_name: 'Demo' },
   });
   assert.equal(attrs.device_id, 'device');
   assert.equal(attrs.consumer_first_name, 'Jane');
+  assert.equal(attrs.consumer_last_name, 'Doe');
   assert.equal(attrs.browser_data.ipAddress, '192.0.2.1');
   assert.equal(attrs.risk.device.device_id, undefined);
+  assert.equal(attrs.risk.device.device_type, 'Tablet');
   assert.equal(attrs.risk.account.fpan_source, 'ONFILE');
+
+  const withoutDeviceType = enrollmentAttributes('buyer@example.com', {
+    firstName: 'Jane', lastName: 'Doe', deviceId: 'device', ipAddress: '192.0.2.1',
+    language: 'en-US', formFactor: 'DESKTOP', distinctBillingLastNameCount: '1',
+    agent: { agent_name: 'Demo' },
+  });
+  assert.equal('device_type' in withoutDeviceType.risk.device, false);
 });
 test('cleared enrollment fields are still rejected', () => {
   assert.throws(() => enrollmentAttributes('buyer@example.com', {
     firstName: '', lastName: '', deviceId: 'device', ipAddress: '', language: 'en',
-    formFactor: '', browserUserAgent: '', distinctBillingLastNameCount: '', agent: { agent_name: 'Demo' },
+    formFactor: '', distinctBillingLastNameCount: '', agent: { agent_name: 'Demo' },
   }));
 });
 test('payment challenge is never reported as a final credential', () => {
@@ -53,7 +64,7 @@ test('only a response containing a payment credential completes payment', () => 
 
 test('spec example prefill supplies all required enrollment details', () => {
   const attrs = enrollmentAttributes('buyer@example.com', {
-    ...AMEX_ENROLLMENT_EXAMPLE, language: 'uk-UA', browserUserAgent: 'current browser',
+    ...AMEX_ENROLLMENT_EXAMPLE, language: 'uk-UA',
   });
   assert.equal(attrs.consumer_id, 'user-12345');
   assert.equal(attrs.consumer_first_name, 'Jane');
@@ -61,8 +72,8 @@ test('spec example prefill supplies all required enrollment details', () => {
   assert.equal(attrs.device_id, '565266');
   assert.equal(attrs.browser_data.ipAddress, '192.168.1.1');
   assert.equal(attrs.browser_data.browserLanguage, 'uk-UA');
-  assert.equal(attrs.browser_data.userAgent, 'current browser');
   assert.equal(attrs.risk.device.form_factor, 'MOBILE');
+  assert.equal(attrs.risk.device.device_type, 'Phone');
   assert.equal(attrs.risk.account.distinct_billing_last_name_count, '2');
   assert.deepEqual(attrs.agents, [{ agent_name: 'NexusAI', llm_version: 'gpt-4.1' }]);
 });
