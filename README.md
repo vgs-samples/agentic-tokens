@@ -59,14 +59,14 @@ A vault may also report `cardholder_verification: "none"` — no verification st
 which case the app goes straight from enrollment to creating an intent.
 
 Both flows above are Visa. Mastercard now uses the same simple verification panel
-as Amex, with one extra step to retrieve the available OTP methods:
+as Amex, with one extra step to retrieve the available verification methods:
 
 - Mastercard: Create Card → Enroll Token → Get Verification Options → Cardholder
   Verification → Checkout Cryptogram.
 - Amex: Create Card → Enroll Token → Cardholder Verification (when enrollment asks
   for OTP) → Get Payment Credential. Amex supplies its options during enrollment.
 
-Both use the shared `/agentic-tokens/{token_id}/otp/{identifier}` and
+SMS and email use the shared `/agentic-tokens/{token_id}/otp/{identifier}` and
 `/agentic-tokens/{token_id}/otp` endpoints. Mastercard lookup uses
 `GET /agentic-tokens/{token_id}/step-up-options?client_ref_id=vgs:ms:v1:<uuid>`.
 The demo generates that marker automatically. It treats method identifiers and
@@ -84,6 +84,16 @@ HTTP errors do not enable checkout. New lookup, changing channels, resending,
 changing the card and re-enrollment invalidate previous verification. Expired
 context errors offer **Get New Verification Options**. There are no automatic
 OTP retries. Verification state lives only in browser memory.
+
+When Mastercard offers **3DS**, select **3DS — Verify with your bank** instead.
+Enter the acquiring merchant ID/BIN assigned during Mastercard onboarding, the
+registered merchant name, and the cardholder's billing postal code/country.
+Press **Verify with Bank (3DS)** and allow the Mastercard popup. The demo waits
+for a matching successful authentication and positive 3DS proof; closing or
+cancelling the popup does not complete verification. No passkey is created.
+The returned provider assurance data stays in memory and accompanies the next
+SCOF cryptogram request for Mastercard to validate. Refreshing options, changing
+the card/method or re-enrolling discards this proof.
 
 The same verification UI preserves Amex/Visa references when the API doesn't
 return a replacement. Visa's separate enrollment/passkey flows and Amex payment

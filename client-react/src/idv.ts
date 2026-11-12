@@ -33,6 +33,8 @@ export interface OtpMethod {
   identifier: string;
   /** Masked destination, safe to show the cardholder (e.g. "**PSMS"). */
   value?: string;
+  /** Browser verification methods additionally carry the provider's launch URI. */
+  uriData?: { uri: string; uriType: string };
 }
 
 /** Result of step 1. */
@@ -45,7 +47,7 @@ export interface StepUpOptions {
    * and you should use the library instead.
    */
   passkeyRequired: boolean;
-  /** Offered methods, filtered to real OTP methods (see isOtpMethod). */
+  /** Executable OTP methods, plus Mastercard browser 3DS when offered. */
   methods: OtpMethod[];
   /** Raw response, for display/debugging. */
   raw: unknown;
@@ -89,6 +91,11 @@ export function newClientRefId(network?: string): string {
 export function isOtpMethod(m: OtpMethod): boolean {
   return Boolean(m) && typeof m.method === "string" && m.method.startsWith("OTP")
     && typeof m.identifier === "string" && Boolean(m.identifier);
+}
+
+export function isThreeDsMethod(m: OtpMethod): boolean {
+  return Boolean(m) && m.method === "3DS" && typeof m.identifier === "string" && Boolean(m.identifier)
+    && m.uriData?.uriType === "WEB_URI" && typeof m.uriData.uri === "string";
 }
 
 /** Call this app's backend, which proxies to the VGS API. */
@@ -140,7 +147,8 @@ export async function getStepUpOptions(tokenId: string, clientRefId: string): Pr
     status: attrs.status,
     // Absent means "run the passkey" — only an explicit false is the ID&V flow.
     passkeyRequired: attrs.passkey_required !== false,
-    methods: Array.isArray(attrs.stepUpRequest) ? attrs.stepUpRequest.filter(isOtpMethod) : [],
+    methods: Array.isArray(attrs.stepUpRequest) ? attrs.stepUpRequest.filter((m) =>
+      isOtpMethod(m) || (clientRefId.startsWith("vgs:ms:") && isThreeDsMethod(m))) : [],
     raw: data,
   };
 }
@@ -248,6 +256,135 @@ export function readOtpVerification(body: unknown, tokenId: string, currentRef: 
 }
 
 export function otpMethodLabel(method: OtpMethod): string {
-  const label = ({ OTPSMS: "SMS", OTPEMAIL: "Email" } as Record<string, string>)[method.method] ?? method.method;
+  const label = ({ OTPSMS: "SMS", OTPEMAIL: "Email", "3DS": "3DS — Verify with your bank" } as Record<string, string>)[method.method] ?? method.method;
   return method.value ? `${label} — ${method.value}` : label;
+}
+
+export interface ThreeDsInput {
+  acquirer_merchant_id: string;
+  acquirer_bin: string;
+  merchant_name: string;
+  billing_address: { zip: string; country_code: string; line1?: string };
+  force_challenge?: boolean;
+}
+
+export interface AuthenticationUiPreparation {
+  launch_uri: string;
+  authentication_payload: Record<string, unknown>;
+}
+
+function authUiUrl(value: string, browserOrigin: string): URL {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || !["sandbox.src.mastercard.com", "src.mastercard.com"].includes(url.hostname)
+    || url.port || url.username || url.password || url.pathname !== "/auth" || url.hash
+    || url.searchParams.get("origin") !== browserOrigin || [...url.searchParams.keys()].length !== 1) {
+    throw new IdvError("The API did not return a trusted Mastercard verification URL.");
+  }
+  return url;
+}
+
+export function readAuthenticationUiPreparation(body: unknown, tokenId: string, browserOrigin: string): AuthenticationUiPreparation {
+  const attrs = otpAttributes(body, "authentication_ui", tokenId);
+  const payload = attrs.authentication_payload;
+  if (typeof attrs.launch_uri !== "string" || !record(payload)
+    || !record(payload.accountReference) || payload.accountReference.srcDigitalCardId !== tokenId
+    || !record(payload.authenticationMethod) || payload.authenticationMethod.authenticationMethodType !== "3DS"
+    || payload.authenticationMethod.authenticationSubject !== "CARDHOLDER"
+    || typeof payload.srcCorrelationId !== "string" || !payload.srcCorrelationId
+    || typeof payload.traceId !== "string" || !payload.traceId) {
+    throw new IdvError("Mastercard verification preparation does not match this card.");
+  }
+  authUiUrl(attrs.launch_uri, browserOrigin);
+  return { launch_uri: attrs.launch_uri, authentication_payload: payload };
+}
+
+/** Browser validation is a demo flow decision; Mastercard validates the proof at checkout. */
+export function readThreeDsResult(value: unknown, prepared: AuthenticationUiPreparation): Record<string, unknown> {
+  const expected = prepared.authentication_payload;
+  if (!record(value) || value.srcCorrelationId !== expected.srcCorrelationId
+    || (value.traceId != null && value.traceId !== expected.traceId)
+    || (expected.srciTransactionId != null && value.srciTransactionId !== expected.srciTransactionId)
+    || (record(value.accountReference) && record(expected.accountReference)
+      && value.accountReference.srcDigitalCardId !== expected.accountReference.srcDigitalCardId)) {
+    throw new IdvError("Mastercard returned a mismatched verification result. Start a new verification.");
+  }
+  if (value.authenticationStatus !== "COMPLETE" || value.authenticationResult !== "AUTHENTICATED") {
+    throw new IdvError("Bank verification was not completed successfully. You can try again.");
+  }
+  const assurance = value.assuranceData;
+  if (!record(assurance) || !Array.isArray(assurance.verificationData)
+    || !assurance.verificationData.every(record) || !assurance.verificationData.some((proof) =>
+      proof.verificationType === "CARDHOLDER" && proof.verificationEntity === "03" && proof.verificationMethod === "01"
+      && proof.verificationResults === "01" && typeof proof.additionalData === "string" && proof.additionalData.trim())) {
+    throw new IdvError("Mastercard did not return a successful 3DS verification proof.");
+  }
+  return assurance;
+}
+
+type PopupHost = Pick<Window, "open" | "addEventListener" | "removeEventListener" | "setTimeout" | "clearTimeout" | "setInterval" | "clearInterval">;
+
+/** Open before awaiting preparation so browsers recognize the user's click. */
+export function launchThreeDs(
+  host: PopupHost, prepare: () => Promise<AuthenticationUiPreparation>, browserOrigin: string,
+  onExchange: (message: unknown) => void,
+): { result: Promise<{ raw: unknown; assuranceData: Record<string, unknown> }>; cancel: () => void } {
+  const popup = host.open("about:blank", "_blank", "popup,width=480,height=720");
+  if (!popup) throw new IdvError("Allow popups for this site to open bank verification.");
+  let settled = false;
+  let initialized = false;
+  let preparation: AuthenticationUiPreparation | undefined;
+  let expectedOrigin = "";
+  let resolveResult: (value: { raw: unknown; assuranceData: Record<string, unknown> }) => void;
+  let rejectResult: (error: Error) => void;
+  const result = new Promise<{ raw: unknown; assuranceData: Record<string, unknown> }>((resolve, reject) => {
+    resolveResult = resolve; rejectResult = reject;
+  });
+  function finish(error?: Error, value?: { raw: unknown; assuranceData: Record<string, unknown> }) {
+    if (settled) return;
+    settled = true;
+    host.removeEventListener("message", onMessage);
+    host.clearInterval(closedTimer); host.clearTimeout(timeoutTimer);
+    if (!popup!.closed) popup!.close();
+    if (error) rejectResult(error); else resolveResult(value!);
+  }
+  function onMessage(event: MessageEvent) {
+    if (settled || !preparation || event.source !== popup || event.origin !== expectedOrigin || !record(event.data)) return;
+    if (event.data.action === "Ready" && !initialized) {
+      initialized = true;
+      const message = { action: "Authenticate", payload: preparation.authentication_payload };
+      try { popup!.postMessage(message, expectedOrigin); onExchange(message); }
+      catch { finish(new IdvError("Could not initialize Mastercard verification.")); }
+    } else if (initialized && ["Success", "Error"].includes(String(event.data.action))) {
+      onExchange(event.data);
+      if (event.data.action === "Error") { finish(new IdvError("Mastercard verification failed. See the provider response.")); return; }
+      try { finish(undefined, { raw: event.data.payload, assuranceData: readThreeDsResult(event.data.payload, preparation) }); }
+      catch (error) { finish(error instanceof Error ? error : new IdvError("Invalid bank verification result.")); }
+    }
+  }
+  host.addEventListener("message", onMessage);
+  const closedTimer = host.setInterval(() => {
+    if (popup.closed) finish(new IdvError("The bank verification window was closed. You can try again."));
+  }, 500);
+  const timeoutTimer = host.setTimeout(() => finish(new IdvError("Bank verification timed out. You can try again.")), 600000);
+  void (async () => {
+    try {
+      const prepared = await prepare();
+      if (settled) return;
+      const url = authUiUrl(prepared.launch_uri, browserOrigin);
+      preparation = prepared; expectedOrigin = url.origin;
+      popup.location.replace(url.href);
+    } catch (error) { finish(error instanceof Error ? error : new IdvError("Could not prepare bank verification.")); }
+  })();
+  return { result, cancel: () => finish(new IdvError("Bank verification was cancelled.")) };
+}
+
+export async function prepareThreeDs(tokenId: string, identifier: string, input: ThreeDsInput): Promise<AuthenticationUiPreparation> {
+  const origin = window.location.origin;
+  const body = await call("POST", `/authentication-ui?tokenId=${encodeURIComponent(tokenId)}`, {
+    data: { type: "authentication_ui", attributes: {
+      ...input, identifier, browser_origin: origin,
+      dpa_locale: /^[a-z]{2}[-_][a-z]{2}$/i.test(navigator.language) ? navigator.language.replace("-", "_") : "en_US",
+    } },
+  });
+  return readAuthenticationUiPreparation(body, tokenId, origin);
 }

@@ -10,7 +10,7 @@ import { getStepUpOptions, requestOtp, submitOtp, readOtpDelivery, readOtpVerifi
 
 // Real demo HTTP routes plus frontend builders/parsers; only Maranui is simulated.
 // All URLs and credentials are local test fixtures.
-test("SMS and email through Express and Netlify: lookup, delivery, rejected code, pending, verification and resend", async (t) => {
+test("Mastercard ID&V through Express and Netlify: OTP and browser 3DS preparation", async (t) => {
   const calls = [];
   const token = "synthetic-token";
   const originalRef = "vgs:ms:v1:test-attempt";
@@ -55,6 +55,17 @@ test("SMS and email through Express and Netlify: lookup, delivery, rejected code
       assert.equal(attrs.otp, "012345");
       return reply("otp_submissions", token, { status: "VALIDATED", authenticationContext: null });
     }
+    if (req.url === `${root}/authentication-ui`) {
+      assert.equal(req.method, "POST");
+      assert.equal(body.data.type, "authentication_ui");
+      assert.equal(attrs.identifier, "vgs:ms:v1:browser-context");
+      assert.equal(attrs.browser_origin, "https://demo.test");
+      assert.equal(attrs.billing_address.country_code, "US");
+      return reply("authentication_ui", token, {
+        launch_uri: "https://sandbox.src.mastercard.com/auth?origin=https%3A%2F%2Fdemo.test",
+        authentication_payload: { accountReference: { srcDigitalCardId: token }, srcCorrelationId: "test-correlation" },
+      });
+    }
     res.statusCode = 404;
     res.end(JSON.stringify({ error: "Unexpected upstream route" }));
   });
@@ -86,7 +97,7 @@ test("SMS and email through Express and Netlify: lookup, delivery, rejected code
     child.once("exit", (code) => { clearTimeout(timeout); reject(new Error(`Demo server exited: ${code}`)); });
   });
   Object.assign(process.env, env);
-  const handlers = Object.fromEntries(await Promise.all(["step-up-options", "otp"]
+  const handlers = Object.fromEntries(await Promise.all(["step-up-options", "otp", "authentication-ui"]
     .map(async (name) => [name, (await import(`../../netlify/functions/${name}.js`)).default])));
   const nativeFetch = globalThis.fetch;
   for (const adapter of ["Express", "Netlify"]) {
@@ -113,5 +124,29 @@ test("SMS and email through Express and Netlify: lookup, delivery, rejected code
         assert.equal(calls.length - before, 6, "No implicit retries or duplicate sends");
       });
     }
+    await t.test(`${adapter} browser 3DS preparation`, async () => {
+      const body = { data: { type: "authentication_ui", attributes: {
+        identifier: "vgs:ms:v1:browser-context", browser_origin: "https://demo.test",
+        acquirer_merchant_id: "merchant", acquirer_bin: "123456", merchant_name: "Demo",
+        billing_address: { zip: "10001", country_code: "US" },
+      } } };
+      const before = calls.length;
+      const invoke = (payload) => {
+        const url = `/api/authentication-ui?tokenId=${encodeURIComponent(token)}`;
+        const options = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
+        return adapter === "Express" ? nativeFetch(`http://127.0.0.1:${port}${url}`, options)
+          : handlers["authentication-ui"](new Request(`http://demo.test${url}`, options));
+      };
+      const response = await invoke(body);
+      assert.equal(response.status, 200);
+      const prepared = (await response.json()).data;
+      assert.equal(prepared.id, token);
+      assert.equal(prepared.type, "authentication_ui");
+      assert.equal(prepared.attributes.authentication_payload.accountReference.srcDigitalCardId, token);
+      assert.deepEqual(calls[before].body, body);
+      assert.equal(calls.length - before, 1, "Preparation must not send OTP or retry");
+      assert.equal((await invoke({ data: { type: "otp_submissions", attributes: {} } })).status, 400);
+      assert.equal(calls.length - before, 1, "Invalid parameters must not reach Maranui");
+    });
   }
 });

@@ -29,10 +29,15 @@ a flow switch, and do not probe an endpoint to guess the flow.
 `agentic_enrollment_required` is independent of the verification value: it alone decides whether the
 **Complete Enrollment** step appears (Visa requires that call *after* verification, before any intent).
 
-All client-side ID&V code is deliberately isolated in **`client-react/src/idv.ts`** (four plain
-`fetch` calls, no library dependency) so customers can read one file to understand the flow. Keep it
+All client-side ID&V transport and browser protocol code is deliberately isolated in
+**`client-react/src/idv.ts`** (plain fetch calls and the Mastercard popup lifecycle, no library dependency)
+so customers can read one file to understand the flow. Keep it
 that way: don't spread ID&V calls into components, and don't extend the auth library to cover this
-flow — the library exists for the iframe/passkey lifecycle, which ID&V doesn't have.
+flow — the library exists for the Visa iframe/passkey lifecycle.
+Mastercard `3DS` uses its own hosted bank verification popup and does not create a passkey.
+`components/MastercardThreeDs.tsx` supplies the acquiring/billing form over `idv.ts`.
+Keep provider assurance data in memory, invalidate it on lookup/card/method/enrollment
+changes, and forward it on SCOF checkout as `assurance_data` for Mastercard validation.
 
 The network is resolved at card creation — from the preset test card or, for a custom PAN, the brand Collect.js reports (`networkFromCardType` in `client-react/src/flow.ts`) — and authoritatively reconciled from the enroll response (`reconcileNetwork`). The active flow drives which step blocks render and their numbering — see `stepsFor` and `NETWORK_PHASES` in `flow.ts`. Mastercard test card: `2222690420064574`; Amex test card: `379258101671003`, CID `1111`, exp `12/27`.
 
@@ -79,6 +84,7 @@ All routes proxy to VGS APIs with a Bearer token. The two base URLs are `VGS_API
 | `POST /api/cards` | CMP — create test card |
 | `POST /api/cards/:cardId/agentic-tokens` | Enroll card for agentic payments |
 | `GET /api/step-up-options?tokenId=&clientRefId=` | ID&V — cardholder verification options (`clientRefId` required, URL-safe) |
+| `POST /api/authentication-ui?tokenId=` | Mastercard — prepare hosted browser 3DS verification |
 | `POST /api/otp/:identifier?tokenId=` | ID&V — deliver the one-time code via the chosen method |
 | `POST /api/otp?tokenId=` | ID&V — verify the code (completes verification) |
 | `POST /api/agentic-enrollments?tokenId=` | ID&V — finish enrollment after verification |

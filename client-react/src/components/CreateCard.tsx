@@ -180,7 +180,7 @@ export function CreateCard() {
       const cardId = result?.data?.data?.id;
       if (cardId) {
         const network = resolveNetwork();
-        setState((s) => ({ ...s, cardId, network, tokenId: null, otpContext: null, otpVerifiedTokenId: null, intentId: null, assuranceData: null,
+        setState((s) => ({ ...s, cardId, network, tokenId: null, otpContext: null, otpVerifiedTokenId: null, intentId: null, assuranceData: null, mastercardAssuranceData: null,
           cardholderVerification: null, agenticEnrollmentRequired: false,
           completedSteps: new Set(),
         }));

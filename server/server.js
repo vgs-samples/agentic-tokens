@@ -2,7 +2,7 @@ import express from "express";
 import { config as loadEnv } from "dotenv";
 import { config as vgsConfig, callVgs, getAccessToken, hasCredentials } from "./vgs.js";
 import { enrichCardSurface, enrichMissingCardSurfaces } from "./card-surface.js";
-import { getOtpOptions, sendOrVerifyOtp } from "./otp.js";
+import { getOtpOptions, sendOrVerifyOtp, prepareAuthenticationUi } from "./otp.js";
 
 loadEnv();
 
@@ -81,6 +81,11 @@ app.delete("/api/amex-enrollments", handler(async (req, res) => {
 // Shared Visa / Amex / Mastercard OTP flow.
 app.get("/api/step-up-options", handler(async (req, res) => {
   const { status, data } = await getOtpOptions(req.query.tokenId, req.query.clientRefId);
+  res.status(status).json(data);
+}));
+
+app.post("/api/authentication-ui", handler(async (req, res) => {
+  const { status, data } = await prepareAuthenticationUi(req.query.tokenId, req.body);
   res.status(status).json(data);
 }));
 

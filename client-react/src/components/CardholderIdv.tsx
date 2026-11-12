@@ -7,6 +7,7 @@ import {
 import { useAppState, useStepStatus } from "../useAppState";
 import { Step } from "./Step";
 import { Field, Button } from "./ui";
+import { MastercardThreeDs } from "./MastercardThreeDs";
 
 export function CardholderIdv({ consumerEmail }: { consumerEmail: string }) {
   const { state, setState, log, setLoading, completeStep, goToStep } = useAppState();
@@ -25,6 +26,7 @@ export function CardholderIdv({ consumerEmail }: { consumerEmail: string }) {
   const originalRef = context?.clientRefId ?? localReference;
   const methods = context?.methods ?? localMethods;
   const selectedIdentifier = methods.some((method) => method.identifier === selected) ? selected : methods[0]?.identifier ?? "";
+  const threeDs = mastercard && methods.find((method) => method.identifier === selectedIdentifier)?.method === "3DS";
   const running = useRef(false);
   const mounted = useRef(true);
   const busy = loading || state.loadingSteps.size > 0;
@@ -38,7 +40,7 @@ export function CardholderIdv({ consumerEmail }: { consumerEmail: string }) {
     setState((s) => {
       const completedSteps = new Set(s.completedSteps);
       for (const step of ["idv", "agenticEnroll", "intent", "cryptogram", "confirm"] as const) completedSteps.delete(step);
-      return { ...s, completedSteps, otpVerifiedTokenId: null, assuranceData: null, intentId: null };
+      return { ...s, completedSteps, otpVerifiedTokenId: null, assuranceData: null, mastercardAssuranceData: null, intentId: null };
     });
   }
 
@@ -122,7 +124,7 @@ export function CardholderIdv({ consumerEmail }: { consumerEmail: string }) {
   }
 
   return <Step stepKey="idv" title="Cardholder Verification (ID&V)" response={response}>
-    <p className="text-sm text-gray-500">Choose where to receive a code, then enter it to verify the cardholder.</p>
+    <p className="text-sm text-gray-500">Choose a verification method. Your bank may offer a code or a secure verification window.</p>
     {done && <p role="status" className="text-sm text-green-700">Cardholder verified.</p>}
     {!context && !mastercard && <Button onClick={getOptions} disabled={busy || !ready}>Get Verification Options</Button>}
     {mastercard && (!context || restartRequired) && <Button variant="secondary" onClick={() => goToStep("otpOptions")} disabled={busy}>
@@ -130,16 +132,19 @@ export function CardholderIdv({ consumerEmail }: { consumerEmail: string }) {
     </Button>}
     {methods.length > 0 && <>
       <div className="mt-3 flex flex-wrap items-end gap-2">
-        <Field label="Send code by">
-          <select aria-label="Send code by" className="input w-64" value={selectedIdentifier} disabled={busy || restartRequired}
+        <Field label="Verification method">
+          <select aria-label="Verification method" className="input w-64" value={selectedIdentifier} disabled={busy || restartRequired}
             onChange={(e) => selectMethod(e.target.value)}>
             {methods.map((method) => <option key={method.identifier} value={method.identifier}>{otpMethodLabel(method)}</option>)}
           </select>
         </Field>
-        <Button onClick={sendCode} disabled={busy || !ready || !selectedIdentifier || restartRequired}>
+        {!threeDs && <Button onClick={sendCode} disabled={busy || !ready || !selectedIdentifier || restartRequired}>
           {verificationRef ? "Resend Code" : "Send Code"}
-        </Button>
+        </Button>}
       </div>
+      {threeDs && ready && !restartRequired && <MastercardThreeDs key={`${state.tokenId}:${state.enrollmentVersion}:${selectedIdentifier}`} identifier={selectedIdentifier}
+        onStart={() => { invalidate(); setError(""); setNotice(""); setResponse(null); }}
+        onResponse={setResponse} onError={fail} />}
       {verificationRef && <div className="mt-3 flex flex-wrap items-end gap-2">
         <Field label="Verification code">
           <input aria-label="Verification code" className="input w-48" autoComplete="one-time-code" inputMode="numeric"
