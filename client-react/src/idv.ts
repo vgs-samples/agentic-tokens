@@ -17,9 +17,10 @@
  * API with server-side credentials — see `server/server.js`. Keep it that way in your own
  * integration: the browser never needs VGS credentials for this flow.
  *
- * The `clientRefId` ties the calls together. Visa clients generate it once with
- * `newClientRefId()`. Mastercard starts with `newClientRefId("mastercard")`, keeps that
- * lookup reference for delivery/resends, and uses the latest returned reference for verification.
+ * The `clientRefId` ties the calls together. Visa and Mastercard use enrollment's
+ * client_ref_id. Visa falls back to `newClientRefId()` and Mastercard to
+ * `newClientRefId("mastercard")` for older responses. Both keep that lookup reference
+ * for delivery/resends and use the latest returned reference for verification.
  *
  * Contrast with the passkey flow (`vgs-agentic-auth.js` + `DeviceBinding.tsx`), where the
  * library manages a Visa iframe and returns `assuranceData` for intent creation.
@@ -49,6 +50,18 @@ export interface StepUpOptions {
   methods: OtpMethod[];
   /** Raw response, for display/debugging. */
   raw: unknown;
+}
+
+/** Visa/Mastercard enrollment can supply a reference before methods are loaded. */
+export function enrollmentOtpContext(body: unknown, network: string): { clientRefId: string; methods: OtpMethod[] } | null {
+  const attrs = record(body) && record(body.data) && record(body.data.attributes) ? body.data.attributes : null;
+  if (!attrs || typeof attrs.client_ref_id !== "string" || !attrs.client_ref_id) return null;
+  const methods = Array.isArray(attrs.stepUpRequest) ? attrs.stepUpRequest.filter(isOtpMethod) : [];
+  if (network === "mastercard") {
+    return attrs.client_ref_id.startsWith("vgs:ms:") ? { clientRefId: attrs.client_ref_id, methods } : null;
+  }
+  if (network === "visa") return { clientRefId: attrs.client_ref_id, methods };
+  return methods.length ? { clientRefId: attrs.client_ref_id, methods } : null;
 }
 
 /** HTTP errors retain the complete API body for the demo's response panel. */

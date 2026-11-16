@@ -16,6 +16,9 @@ carries `data.attributes.cardholder_verification` (`passkey` / `otp` / `none`) a
 `setFlowFromEnrollment`, and `stepsFor(network, verification, agenticEnrollmentRequired)` in
 `flow.ts` composes the step list from them. The header indicator is read-only — do not reintroduce
 a flow switch, and do not probe an endpoint to guess the flow.
+The explicitly requested temporary **Enable OTP for Mastercard** checkbox in the
+enrollment form sends `mc_enable_otp: true` only when checked, off by default.
+It requests the flow from the API; progression still follows the enrollment response.
 
 - **`passkey`** — FIDO passkey ceremony in a Visa iframe, driven by `vgs-agentic-auth.js`; produces
   `assurance_data` for intent creation. (Visa may still demand a one-time code first; that is per

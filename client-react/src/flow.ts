@@ -92,7 +92,7 @@ const NETWORK_PHASES: Record<Network, { enrollment: boolean; intent: boolean; co
  * enrollment call is needed. Every combination is therefore handled, including a Visa vault
  * that waives verification entirely.
  *
- * The Mastercard demo always exercises shared OTP, with a separate options step.
+ * Mastercard uses shared OTP unless enrollment explicitly reports none.
  * Amex adds ID&V only when enrollment explicitly requests OTP; older responses keep
  * the direct enrollment-to-credential flow.
  *
@@ -105,7 +105,7 @@ export function stepsFor(
 ): StepKey[] {
   const phases = NETWORK_PHASES[network];
   const steps: StepKey[] = ["card", "enroll"];
-  if (network === "mastercard") steps.push("otpOptions", "idv");
+  if (network === "mastercard" && verification !== "none") steps.push("otpOptions", "idv");
   if (phases.enrollment) {
     const v = verification ?? DEFAULT_CARDHOLDER_VERIFICATION;
     if (v === "passkey") steps.push("deviceBinding");

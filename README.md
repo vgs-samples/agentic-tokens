@@ -31,6 +31,21 @@ docker compose up -d --no-deps --build server
 
 ## Flow
 
+Visa and Mastercard enrollment responses supply `data.attributes.client_ref_id`.
+The demo keeps this reference for lookup and OTP delivery/verification, following
+any replacement reference returned by the API. Older Visa responses without a
+reference retain the client-generated UUID fallback.
+The Visa ID&V panel shows the lookup/delivery `client_ref_id` and, after code
+delivery, the verification reference. The browser log records which reference
+each request uses, so it can be compared with enrollment. OTP values are not logged.
+
+Mastercard enrollment defaults to `cardholder_verification: "none"`, so the demo
+proceeds directly to checkout. Temporary API enrollment flag
+`data.attributes.mc_enable_otp: true` selects `otp`, enabling verification options
+and ID&V. Only JSON boolean `true` enables this; the demo follows the API response.
+The Mastercard enrollment form exposes **Enable OTP for Mastercard**, off by
+default. Checking it sends this flag on the next enrollment; unchecking omits it.
+
 How the cardholder is verified depends on your vault's configuration, and **the app finds out
 from the API**: the enroll response (step 2) reports `cardholder_verification` and
 `agentic_enrollment_required`, and the remaining steps follow from those two fields. Nothing to
@@ -69,7 +84,10 @@ as Amex, with one extra step to retrieve the available OTP methods:
 Both use the shared `/agentic-tokens/{token_id}/otp/{identifier}` and
 `/agentic-tokens/{token_id}/otp` endpoints. Mastercard lookup uses
 `GET /agentic-tokens/{token_id}/step-up-options?client_ref_id=vgs:ms:v1:<uuid>`.
-The demo generates that marker automatically. It treats method identifiers and
+The demo first uses `data.attributes.client_ref_id` returned by Mastercard enrollment,
+even when no methods accompany it. This preserves the enrollment routing affinity
+through lookup, refreshes and OTP delivery/resends. If enrollment has no reference,
+the demo generates a legacy marker automatically. It treats method identifiers and
 references as opaque: the original lookup reference is used to send/resend a code,
 while the latest `client_ref_id` returned by delivery or pending verification is
 used to check the code. No customer-facing correlation, affinity, locale or session

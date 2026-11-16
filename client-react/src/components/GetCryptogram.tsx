@@ -18,7 +18,7 @@ const CURRENCY_CODES = [
 ] as const;
 
 export function GetCryptogram() {
-  const { state, setState, log, setLoading, completeStep } = useAppState();
+  const { state, setState, log, setLoading, completeStep, flow } = useAppState();
   const { loading, num } = useStepStatus("cryptogram");
   // Branch on the cryptogram *style*, not the network name, so a new network
   // maps onto an existing flavour (intent-scoped vs SCOF checkout) by config.
@@ -29,7 +29,7 @@ export function GetCryptogram() {
   const isScof = cryptogramStyle === "scof";
   const isAmex = cryptogramStyle === "amex";
   const isCardScoped = isAmex || isScof;
-  const requiresOtp = isScof || state.cardholderVerification === "otp";
+  const requiresOtp = flow.includes("idv");
   const idvReady = !requiresOtp || (state.completedSteps.has("idv") && state.otpVerifiedTokenId === state.tokenId);
 
   // Visa transaction-context (cart) fields.

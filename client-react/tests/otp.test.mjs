@@ -1,7 +1,37 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { flowFromEnrollResponse, stepsFor } from "../src/flow.ts";
-import { getStepUpOptions, requestOtp, submitOtp, completeEnrollment, IdvError, idvErrorInfo, idvErrorPayload, newClientRefId, readOtpDelivery, readOtpVerification } from "../src/idv.ts";
+import { enrollmentOtpContext, getStepUpOptions, requestOtp, submitOtp, completeEnrollment, IdvError, idvErrorInfo, idvErrorPayload, newClientRefId, readOtpDelivery, readOtpVerification } from "../src/idv.ts";
+
+test("Mastercard enrollment routing reference survives without preloaded methods and is forwarded unchanged", async (t) => {
+  const reference = `vgs:ms:lookup:v1:${"opaque-context".repeat(30)}`;
+  const context = enrollmentOtpContext({ data: { attributes: { client_ref_id: reference } } }, "mastercard");
+  assert.deepEqual(context, { clientRefId: reference, methods: [] });
+  t.mock.method(globalThis, "fetch", async (url) => {
+    assert.equal(new URL(url, "https://demo.test").searchParams.get("clientRefId"), reference);
+    return Response.json({ data: { attributes: { passkey_required: false, stepUpRequest: [] } } });
+  });
+  await getStepUpOptions("mc-token", context.clientRefId);
+  assert.equal(enrollmentOtpContext({ data: { attributes: { client_ref_id: reference } } }, "amex"), null);
+  assert.equal(enrollmentOtpContext({ data: { attributes: {} } }, "mastercard"), null);
+});
+
+test("Visa uses the enrollment reference unchanged for lookup, OTP delivery and verification", async (t) => {
+  const reference = "ea419845-d22c-448f-a18d-558b7467b600";
+  const context = enrollmentOtpContext({ data: { attributes: { client_ref_id: reference } } }, "visa");
+  assert.deepEqual(context, { clientRefId: reference, methods: [] });
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    calls.push({ url, ...options });
+    return Response.json({ data: { attributes: { passkey_required: false, stepUpRequest: [] } } });
+  });
+  await getStepUpOptions("visa-token", context.clientRefId);
+  await requestOtp("visa-token", context.clientRefId, "sms");
+  await submitOtp("visa-token", context.clientRefId, "buyer@example.test", "123456");
+  assert.equal(new URL(calls[0].url, "https://demo.test").searchParams.get("clientRefId"), reference);
+  for (const call of calls.slice(1)) assert.equal(JSON.parse(call.body).data.attributes.client_ref_id, reference);
+  assert.equal(enrollmentOtpContext({ data: { attributes: {} } }, "visa"), null);
+});
 
 for (const verification of [null, "passkey", "otp", "none"]) {
   for (const enrollmentRequired of [false, true]) {
@@ -15,7 +45,9 @@ for (const verification of [null, "passkey", "otp", "none"]) {
     });
 
     test(`Mastercard preserves ${verification ?? "legacy"} flow, enrollment=${enrollmentRequired}`, () => {
-      assert.deepEqual(stepsFor("mastercard", verification, enrollmentRequired), ["card", "enroll", "otpOptions", "idv", "cryptogram"]);
+      assert.deepEqual(stepsFor("mastercard", verification, enrollmentRequired), [
+        "card", "enroll", ...(verification === "none" ? [] : ["otpOptions", "idv"]), "cryptogram",
+      ]);
     });
 
     test(`Amex ${verification ?? "legacy"} flow, enrollment=${enrollmentRequired}`, () => {

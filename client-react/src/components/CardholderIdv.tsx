@@ -62,12 +62,14 @@ export function CardholderIdv({ consumerEmail }: { consumerEmail: string }) {
     await run(async () => {
       invalidate(); setVerificationRef(null); setLocalMethods([]); setSelected(""); setRestartRequired(false);
       try {
-        const ref = newClientRefId();
+        const ref = originalRef;
+        if (state.network === "visa") log(`Step ${num}: Lookup client_ref_id=${ref}`);
         const options = await getStepUpOptions(state.tokenId!, ref);
         if (!mounted.current) return;
         setResponse(options.raw);
         if (options.passkeyRequired) throw new Error("This card requires a different verification flow.");
         setLocalReference(ref); setLocalMethods(options.methods);
+        setState((s) => ({ ...s, otpContext: { clientRefId: ref, methods: options.methods } }));
         if (!options.methods.length) setNotice("No SMS or email options are available. Verification has not been completed.");
       } catch (err) { if (mounted.current) fail(err); }
     });
@@ -79,6 +81,7 @@ export function CardholderIdv({ consumerEmail }: { consumerEmail: string }) {
       if (verificationRef) setOtp("");
       invalidate(); setVerificationRef(null);
       log(`Step ${num}: Requesting a verification code...`);
+      if (state.network === "visa") log(`Step ${num}: OTP delivery client_ref_id=${originalRef}`);
       try {
         // Resends use the original lookup reference, never the session returned by delivery.
         const body = await requestOtp(state.tokenId!, originalRef, selectedIdentifier);
@@ -94,6 +97,7 @@ export function CardholderIdv({ consumerEmail }: { consumerEmail: string }) {
     if (!verificationRef || !otp.trim() || restartRequired) return;
     await run(async () => {
       const submittedOtp = otp.trim();
+      if (state.network === "visa") log(`Step ${num}: OTP verification client_ref_id=${verificationRef}`);
       try {
         const body = await submitOtp(state.tokenId!, verificationRef, consumerEmail, submittedOtp);
         if (!mounted.current) return;
@@ -123,8 +127,17 @@ export function CardholderIdv({ consumerEmail }: { consumerEmail: string }) {
 
   return <Step stepKey="idv" title="Cardholder Verification (ID&V)" response={response}>
     <p className="text-sm text-gray-500">Choose where to receive a code, then enter it to verify the cardholder.</p>
+    {state.network === "visa" && <div className="rounded border border-gray-200 p-3">
+      <Field label="Lookup / delivery client_ref_id">
+        <input aria-label="Lookup / delivery client_ref_id" className="input font-mono text-xs" readOnly value={originalRef} />
+      </Field>
+      <p className="mt-1 text-xs text-gray-500">Sent unchanged for lookup and code delivery. Compare it with the enrollment response.</p>
+      {verificationRef && <Field label="OTP verification client_ref_id">
+        <input aria-label="OTP verification client_ref_id" className="input font-mono text-xs" readOnly value={verificationRef} />
+      </Field>}
+    </div>}
     {done && <p role="status" className="text-sm text-green-700">Cardholder verified.</p>}
-    {!context && !mastercard && <Button onClick={getOptions} disabled={busy || !ready}>Get Verification Options</Button>}
+    {!mastercard && (!context || state.network === "visa") && <Button onClick={getOptions} disabled={busy || !ready}>Get Verification Options</Button>}
     {mastercard && (!context || restartRequired) && <Button variant="secondary" onClick={() => goToStep("otpOptions")} disabled={busy}>
       Get New Verification Options
     </Button>}

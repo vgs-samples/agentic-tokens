@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AMEX_ENROLLMENT_EXAMPLE, deleteAmexEnrollment, enrollmentAttributes, isEnrollmentAlreadyExists } from "../amex";
 import { apiResponse } from "../api";
+import { enrollmentOtpContext } from "../idv";
 import { useAppState, useStepStatus } from "../useAppState";
 import { flowFromEnrollResponse, reconcileNetwork } from "../flow";
 import { Step } from "./Step";
@@ -28,6 +29,7 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
   const { loading, num } = useStepStatus("enroll");
   const [response, setResponse] = useState<unknown>(null);
   const [responseMeta, setResponseMeta] = useState<string | null>(null);
+  const [mcEnableOtp, setMcEnableOtp] = useState(false);
 
   const [consumerId, setConsumerId] = useState(AMEX_ENROLLMENT_EXAMPLE.consumerId ?? "");
   const [firstName, setFirstName] = useState(AMEX_ENROLLMENT_EXAMPLE.firstName);
@@ -51,11 +53,14 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
       const result = await apiResponse<EnrollApiBody>("POST", `/cards/${state.cardId}/agentic-tokens`, {
         data: {
           type: "agentic_tokens",
-          attributes: enrollmentAttributes(consumerEmail, isAmex ? {
-            consumerId, firstName, lastName, deviceId, ipAddress, distinctBillingLastNameCount: nameCount,
-            language: navigator.language, browserUserAgent: navigator.userAgent,
-            formFactor, agent: state.agentContext,
-          } : undefined),
+          attributes: {
+            ...enrollmentAttributes(consumerEmail, isAmex ? {
+              consumerId, firstName, lastName, deviceId, ipAddress, distinctBillingLastNameCount: nameCount,
+              language: navigator.language, browserUserAgent: navigator.userAgent,
+              formFactor, agent: state.agentContext,
+            } : undefined),
+            ...(state.network === "mastercard" && mcEnableOtp ? { mc_enable_otp: true } : {}),
+          },
         },
       });
       const data = result.body;
@@ -67,13 +72,7 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
         // it, in case PAN-based detection at card creation guessed wrong. The
         // network-specific markers live in reconcileNetwork (see flow.ts).
         const network = reconcileNetwork(data, state.network);
-        const attributes = data.data?.attributes;
-        const otpContext = attributes?.client_ref_id && attributes.stepUpRequest?.length
-          ? {
-              clientRefId: attributes.client_ref_id,
-              methods: attributes.stepUpRequest,
-            }
-          : null;
+        const otpContext = enrollmentOtpContext(data, network);
         setState((s) => ({
           ...s, tokenId, network, otpContext, consumerEmail,
           enrollmentVersion: s.enrollmentVersion + 1,
@@ -159,6 +158,14 @@ export function EnrollToken({ consumerEmail, setConsumerEmail }: Props) {
       <Field label="Consumer Email">
         <input className="input" value={consumerEmail} onChange={(e) => setConsumerEmail(e.target.value)} />
       </Field>
+      {state.network === "mastercard" && <div className="mt-3">
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" checked={mcEnableOtp} disabled={state.loadingSteps.size > 0}
+            onChange={(e) => setMcEnableOtp(e.target.checked)} />
+          Enable OTP for Mastercard
+        </label>
+        <p className="mt-1 text-xs text-gray-500">Applies to the next enrollment.</p>
+      </div>}
       {isAmex && <>
         <Field label="Consumer account ID (optional)"><input className="input" value={consumerId} onChange={(e) => setConsumerId(e.target.value)} /></Field>
         <Field label="Cardholder first name"><input className="input" value={firstName} onChange={(e) => setFirstName(e.target.value)} /></Field>
