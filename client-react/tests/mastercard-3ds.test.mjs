@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getStepUpOptions, launchThreeDs, prepareThreeDs, readAuthenticationUiPreparation, readThreeDsResult } from "../src/idv.ts";
+import { getStepUpOptions, launchThreeDs, verifyCardholder, readAuthenticationUiPreparation, readThreeDsResult } from "../src/idv.ts";
 
 const origin = "https://localhost:4200";
 const mcOrigin = "https://sandbox.src.mastercard.com";
@@ -20,20 +20,27 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 test("enrollment 3DS preparation needs no merchant, acquiring or billing input", async (t) => {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
-  Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { origin } } });
+  const b = browser();
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { ...b.host, location: { origin } } });
   t.after(() => {
     if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
     else delete globalThis.window;
   });
   t.mock.method(globalThis, "fetch", async (url, options) => {
-    assert.equal(url, "/api/authentication-ui?tokenId=enrolled-token");
-    assert.deepEqual(JSON.parse(options.body), { data: { type: "authentication_ui", attributes: {
-      identifier: "lookup-identifier", browser_origin: origin,
+    assert.equal(url, "/api/otp/lookup-identifier?tokenId=enrolled-token");
+    assert.deepEqual(JSON.parse(options.body), { data: { type: "otp_methods", attributes: {
+      client_ref_id: "vgs:ms:v1:enrollment-reference", browser_origin: origin,
       dpa_locale: /^[a-z]{2}[-_][a-z]{2}$/i.test(navigator.language) ? navigator.language.replace("-", "_") : "en_US",
     } } });
-    return Response.json({ data: { id: "enrolled-token", type: "authentication_ui", attributes: prepared } });
+    return Response.json({ data: { id: "lookup-identifier", type: "otp_methods",
+      attributes: { method: "3DS", authenticationContext: prepared } } });
   });
-  assert.deepEqual(await prepareThreeDs("enrolled-token", "lookup-identifier"), prepared);
+  const pending = verifyCardholder("enrolled-token", "vgs:ms:v1:enrollment-reference",
+    { method: "3DS", identifier: "lookup-identifier" });
+  await flush();
+  b.emit({ action: "Ready" });
+  b.emit({ action: "Success", payload: success });
+  assert.deepEqual(await pending, { status: "verified", raw: success, assuranceData: success.assuranceData });
 });
 
 function browser(blocked = false) {
@@ -66,14 +73,18 @@ test("Mastercard lookup exposes executable 3DS without changing Visa OTP selecti
 });
 
 test("preparation must match the card, exact Mastercard host and caller origin", () => {
-  const envelope = (attributes) => ({ data: { id: "enrolled-token", type: "authentication_ui", attributes } });
-  assert.deepEqual(readAuthenticationUiPreparation(envelope(prepared), "enrolled-token", origin), prepared);
+  const envelope = (context) => ({ data: { id: "lookup-identifier", type: "otp_methods",
+    attributes: { method: "3DS", authenticationContext: context } } });
+  assert.deepEqual(readAuthenticationUiPreparation(envelope(prepared), "enrolled-token", "lookup-identifier", origin), prepared);
   for (const launch_uri of ["https://evil.example/auth", `${mcOrigin}.evil.example/auth`,
     `${mcOrigin}/auth?origin=https://evil.example`, `${prepared.launch_uri}&redirect=evil`,
     `https://user:pass@sandbox.src.mastercard.com/auth?origin=${encodeURIComponent(origin)}`]) {
-    assert.throws(() => readAuthenticationUiPreparation(envelope({ ...prepared, launch_uri }), "enrolled-token", origin));
+    assert.throws(() => readAuthenticationUiPreparation(envelope({ ...prepared, launch_uri }), "enrolled-token", "lookup-identifier", origin));
   }
-  assert.throws(() => readAuthenticationUiPreparation(envelope(prepared), "another-card", origin));
+  assert.throws(() => readAuthenticationUiPreparation(envelope(prepared), "another-card", "lookup-identifier", origin));
+  assert.throws(() => readAuthenticationUiPreparation(envelope(prepared), "enrolled-token", "another-method", origin));
+  assert.throws(() => readAuthenticationUiPreparation({ data: { id: "lookup-identifier", type: "otp_methods",
+    attributes: { method: "SMS", authenticationContext: prepared } } }, "enrolled-token", "lookup-identifier", origin));
 });
 
 test("only trusted popup Ready initializes once; matching success returns the provider proof unchanged", async () => {

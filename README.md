@@ -87,11 +87,17 @@ OTP retries. Verification state lives only in browser memory.
 
 When Mastercard offers **3DS**, select **3DS — Verify with your bank** instead.
 Press **Verify with Bank (3DS)** and allow the Mastercard popup. Enrollment
-preparation uses the lookup identifier, page origin and browser locale; it does
-not ask for merchant/acquiring identifiers or billing details. The demo waits
+preparation uses the same `/otp/{identifier}` method-selection endpoint as SMS/email,
+with the enrollment `client_ref_id`, page origin and browser locale. Its
+`method: "3DS"` response carries `authenticationContext` for the popup; no separate
+`/authentication-ui` route is used. It does not ask for merchant/acquiring
+identifiers or billing details. The demo waits
 for a matching successful authentication and positive 3DS proof; closing or
 cancelling the popup does not complete verification. No passkey is created.
-The returned provider assurance data stays in memory and accompanies the next
+Both the Visa verification component and Mastercard bank verification call the
+shared `VgsAgenticAuth.verify(...)` SDK method. The SDK owns the iframe/popup
+protocol, result checks, cancellation and cleanup; `idv.ts` only adapts the demo
+HTTP transport. The returned provider assurance data stays in memory and accompanies the next
 SCOF cryptogram request for Mastercard to validate. Refreshing options, changing
 the card/method or re-enrolling discards this proof.
 
@@ -142,9 +148,10 @@ The error does not include the existing ID, so the field starts with the latest 
 from the current flow if available, or stays empty for manual entry. After a
 confirmed deletion, click **Enroll** to retry; deletion does not complete enrollment.
 
-The entire client side of the ID&V flow lives in one file — **`client-react/src/idv.ts`** — as four
-plain `fetch` calls with no library dependency. If you're implementing this flow yourself, read
-that file; the components around it are just forms.
+ID&V HTTP helpers live in **`client-react/src/idv.ts`**. Visa iframe/FIDO and Mastercard
+3DS use the common **`VgsAgenticAuth.verify(...)`** browser SDK; components own the
+forms and step progression. The runtime contract is described in
+**`VGSAgenticSDK/README.md`** and the canonical `maranui/client/README.md`.
 
 > **Sandbox OTP:** Cardholder ID&V and Amex payment verification prefill `111111` when the server has `VGS_VAULT_ENV=sandbox`. The code remains editable; other environments start empty. The Visa device-binding demo uses its separate `456789` code.
 

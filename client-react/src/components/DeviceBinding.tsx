@@ -26,135 +26,108 @@ export function DeviceBinding({ consumerEmail }: Props) {
   const [otpDelivered, setOtpDelivered] = useState(false);
   const [sessionStarted, setSessionStarted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const verificationRef = useRef<AbortController | null>(null);
+  const challengeRef = useRef<{ resolve: () => void } | null>(null);
+  const mounted = useRef(true);
 
-  // This step now unmounts when the enroll response swaps the flow (device binding gives way to
-  // ID&V, or to nothing at all). A session started before that swap has to be closed here —
-  // handleAuthenticate and reset() are the only other places that destroy one.
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      verificationRef.current?.abort();
+      if (verificationRef.current) setLoading("deviceBinding", false);
       const session = sessionRef.current as { destroy?: () => void } | null;
       session?.destroy?.();
       sessionRef.current = null;
-    },
-    [sessionRef],
-  );
+    };
+  }, [sessionRef, setLoading]);
 
   async function handleStartSession() {
+    if (verificationRef.current) return;
+    const controller = new AbortController();
+    verificationRef.current = controller;
     setLoading("deviceBinding", true);
     setSessionStarted(true);
-    log(`Step ${num}: Starting device binding session...`);
+    log(`Step ${num}: Starting cardholder verification...`);
     try {
       const accessToken = await fetchAccessToken();
-      const clientRefId = crypto.randomUUID();
-      log(`Step ${num}: clientRefId=${clientRefId}`);
-
+      const clientRefId = state.otpContext?.clientRefId ?? crypto.randomUUID();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { VgsAgenticAuth }: any = await import("../vgs-agentic-auth.js");
       const flow = new VgsAgenticAuth({
-        tokenId: state.tokenId,
-        environment,
-        consumerEmail,
-        accessToken,
-        clientRefId,
-        authenticationAmount: authAmount,
-        currencyCode,
-        merchantName,
+        tokenId: state.tokenId, environment, consumerEmail, accessToken, clientRefId,
+        authenticationAmount: authAmount, currencyCode, merchantName,
       });
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const session: any = await flow.startSession(containerRef.current);
-      sessionRef.current = session;
-      log(`Step ${num}: Session created. needsOtp=${session.needsOtp} needsPasskey=${session.needsPasskey}`);
-
-      // The only place iframe visibility is decided. The sample-only sizing in
-      // vgs-agentic-auth.js renders it inline; a passkey-exempt vault runs no ceremony, so
-      // there is nothing for the cardholder to see.
-      if (session.needsPasskey === false) {
-        session.iframe.style.display = "none";
-      }
-
-      if (session.needsOtp) {
-        setOtpMethods(session.otpMethods);
-        setSelectedMethodId(session.otpMethods[0]?.identifier ?? "");
-        setOtpDelivered(false);
-        setOtpVisible(true);
-        setLoading("deviceBinding", false);
-      } else {
-        await handleAuthenticate(session);
-      }
+      const { assuranceData } = await flow.verify({
+        container: containerRef.current,
+        signal: controller.signal,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        onSession: (session: any) => {
+          sessionRef.current = session;
+          if (session.needsPasskey === false) session.iframe.style.display = "none";
+        },
+        // The SDK pauses for the application's OTP form, then resumes browser verification.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        onChallenge: (session: any) => {
+          setOtpMethods(session.otpMethods);
+          setSelectedMethodId(session.otpMethods[0]?.identifier ?? "");
+          setOtpDelivered(false);
+          setOtpVisible(true);
+          setLoading("deviceBinding", false);
+          return new Promise<void>((resolve) => { challengeRef.current = { resolve }; });
+        },
+      });
+      if (!mounted.current) return;
+      setState((s) => ({ ...s, assuranceData }));
+      setResponse({ assuranceData });
+      log(`Step ${num}: Cardholder verification complete`);
+      completeStep("deviceBinding");
     } catch (err: unknown) {
+      if (!mounted.current) return;
       const e = err as { message: string; code?: string; status?: number };
-      log(`Step ${num}: Session error — ` + e.message);
+      log(`Step ${num}: Verification error — ${e.message}`);
       setResponse({ error: e.message, code: e.code, status: e.status });
       setSessionStarted(false);
-      setLoading("deviceBinding", false);
+      setOtpVisible(false);
+    } finally {
+      sessionRef.current = null;
+      challengeRef.current = null;
+      verificationRef.current = null;
+      if (mounted.current) setLoading("deviceBinding", false);
     }
   }
 
   async function handleRequestOtp() {
     const method = otpMethods.find((m) => m.identifier === selectedMethodId);
-    if (!method) {
-      log(`Step ${num}: Pick an OTP method first`);
-      return;
-    }
+    if (!method) return;
     setLoading("deviceBinding", true);
-    log(`Step ${num}: Requesting OTP via ${method.method}...`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const session = sessionRef.current as any;
     try {
       await session.requestOtp(method);
+      if (!mounted.current) return;
       setOtpDelivered(true);
       log(`Step ${num}: OTP delivery requested`);
-      setLoading("deviceBinding", false);
     } catch (err: unknown) {
+      if (!mounted.current) return;
       const e = err as { message: string; code?: string };
-      log(`Step ${num}: requestOtp error — ` + e.message);
       setResponse({ error: e.message, code: e.code });
-      setLoading("deviceBinding", false);
-    }
+    } finally { if (mounted.current) setLoading("deviceBinding", false); }
   }
 
   async function handleSubmitOtp() {
     setLoading("deviceBinding", true);
-    log(`Step ${num}: Submitting OTP...`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const session = sessionRef.current as any;
     try {
       await session.submitOtp(otp.trim());
+      if (!mounted.current) return;
       setOtpVisible(false);
-      log(`Step ${num}: OTP accepted`);
-      await handleAuthenticate(session);
+      log(`Step ${num}: OTP accepted; continuing verification...`);
+      challengeRef.current?.resolve();
     } catch (err: unknown) {
+      if (!mounted.current) return;
       const e = err as { message: string; code?: string };
-      log(`Step ${num}: OTP error — ` + e.message);
-      setResponse({ error: e.message, code: e.code });
-      setLoading("deviceBinding", false);
-    }
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async function handleAuthenticate(sessionArg?: any) {
-    setLoading("deviceBinding", true);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const session = sessionArg ?? (sessionRef.current as any);
-    // Passkey-exempt: authenticate() resolves immediately without a ceremony and the backend
-    // synthesizes the assuranceData waiver, so there is nothing to do but say so.
-    log(
-      session.needsPasskey === false
-        ? `Step ${num}: Passkey exempt — skipping passkey ceremony (backend synthesizes the waiver)`
-        : `Step ${num}: Running FIDO ceremony...`,
-    );
-    try {
-      const assuranceData = await session.authenticate();
-      session.destroy();
-      sessionRef.current = null;
-      setState((s) => ({ ...s, assuranceData }));
-      setResponse({ assuranceData });
-      log(`Step ${num}: Device binding complete`);
-      completeStep("deviceBinding");
-    } catch (err: unknown) {
-      const e = err as { message: string; code?: string };
-      log(`Step ${num}: FIDO error — ` + e.message);
       setResponse({ error: e.message, code: e.code });
       setLoading("deviceBinding", false);
     }

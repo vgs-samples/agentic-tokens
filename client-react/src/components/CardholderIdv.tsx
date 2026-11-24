@@ -142,7 +142,7 @@ export function CardholderIdv({ consumerEmail }: { consumerEmail: string }) {
           {verificationRef ? "Resend Code" : "Send Code"}
         </Button>}
       </div>
-      {threeDs && ready && !restartRequired && <MastercardThreeDs key={`${state.tokenId}:${state.enrollmentVersion}:${selectedIdentifier}`} identifier={selectedIdentifier}
+      {threeDs && ready && !restartRequired && <MastercardThreeDs key={`${state.tokenId}:${state.enrollmentVersion}:${selectedIdentifier}`} identifier={selectedIdentifier} clientRefId={originalRef}
         onStart={() => { invalidate(); setError(""); setNotice(""); setResponse(null); }}
         onResponse={setResponse} onError={fail} />}
       {verificationRef && <div className="mt-3 flex flex-wrap items-end gap-2">

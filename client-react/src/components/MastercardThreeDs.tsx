@@ -1,19 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { launchThreeDs, prepareThreeDs } from "../idv";
+import { verifyCardholder } from "../idv";
 import { useAppState } from "../useAppState";
 import { Button } from "./ui";
 
-export function MastercardThreeDs({ identifier, onStart, onResponse, onError }: {
-  identifier: string; onStart: () => void; onResponse: (body: unknown) => void; onError: (error: unknown) => void;
+export function MastercardThreeDs({ identifier, clientRefId, onStart, onResponse, onError }: {
+  identifier: string; clientRefId: string; onStart: () => void; onResponse: (body: unknown) => void; onError: (error: unknown) => void;
 }) {
   const { state, setState, setLoading, completeStep, log } = useAppState();
   const [active, setActive] = useState(false);
-  const flow = useRef<ReturnType<typeof launchThreeDs> | null>(null);
+  const flow = useRef<AbortController | null>(null);
   const mounted = useRef(true);
   const busy = state.loadingSteps.size > 0;
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; flow.current?.cancel(); if (flow.current) setLoading("idv", false); };
+    return () => { mounted.current = false; flow.current?.abort(); if (flow.current) setLoading("idv", false); };
   }, [setLoading]);
 
   async function start() {
@@ -22,10 +22,13 @@ export function MastercardThreeDs({ identifier, onStart, onResponse, onError }: 
     onStart();
     setLoading("idv", true);
     try {
-      flow.current = launchThreeDs(window, () => prepareThreeDs(tokenId, identifier),
-        window.location.origin, (message) => { if (mounted.current) onResponse(message); });
+      flow.current = new AbortController();
+      const pending = verifyCardholder(tokenId, clientRefId, { method: "3DS", identifier }, {
+        signal: flow.current.signal,
+        onExchange: (message: unknown) => { if (mounted.current) onResponse(message); },
+      });
       setActive(true);
-      const result = await flow.current.result;
+      const result = await pending;
       if (!mounted.current) return;
       onResponse(result.raw);
       setState((s) => s.tokenId !== tokenId ? s : {
@@ -40,6 +43,6 @@ export function MastercardThreeDs({ identifier, onStart, onResponse, onError }: 
   return <div className="mt-3">
     <p className="text-sm text-gray-500">Your bank will verify the card in a secure Mastercard window.</p>
     <Button onClick={start} disabled={busy}>Verify with Bank (3DS)</Button>
-    {active && <Button variant="secondary" onClick={() => flow.current?.cancel()}>Cancel Verification</Button>}
+    {active && <Button variant="secondary" onClick={() => flow.current?.abort()}>Cancel Verification</Button>}
   </div>;
 }

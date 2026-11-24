@@ -1,5 +1,30 @@
 # VGS Agentic SDK
 
+## Implemented browser verification runtime
+
+The runtime module is `client-react/src/vgs-agentic-auth.js`, maintained from
+`maranui/client/vgs-agentic-auth.js`. It now provides one
+`VgsAgenticAuth.verify({container, method, onChallenge, signal})` entry point for
+Visa iframe/FIDO and Mastercard 3DS popup verification. Both return
+`{status: "verified", assuranceData, raw}`; window creation, messages, correlation,
+timeouts and cancellation live in the SDK. Consumers do not implement separate
+popup protocols. See `maranui/client/README.md` for the runtime contract.
+
+```js
+const auth = new VgsAgenticAuth({
+  tokenId, clientRefId, consumerEmail, environment: "sandbox", accessToken,
+});
+// Run from the user's click. `method` is the selected lookup method for Mastercard.
+const result = await auth.verify({ container, method, onChallenge: showOtpForm });
+```
+
+The runtime also accepts `request(method, path, body, {signal})` for an application's
+own authenticated backend transport. The demo supplies this through
+`idv.ts::verifyCardholder`; the SDK has no dependency on the demo's `/api/*` routes.
+The following full token/intent SDK describes a broader API design; the new runtime
+verification method is available in the repository and is not an npm publication.
+
+
 Browser SDK for integrating with the VGS Agentic Tokens API. Covers the full consumer flow for issuing agentic payment tokens:
 
 1. Enroll a card into an agentic token

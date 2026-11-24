@@ -37,6 +37,16 @@ test("Mastercard ID&V through Express and Netlify: OTP and browser 3DS preparati
     if (req.url.startsWith(`${root}/otp/`)) {
       assert.equal(attrs.client_ref_id, originalRef, "Delivery and resend must use the lookup reference");
       assert.equal(body.data.type, "otp_methods");
+      const selectedIdentifier = decodeURIComponent(req.url.slice(`${root}/otp/`.length));
+      if (selectedIdentifier === "vgs:ms:v1:browser-context") {
+        assert.equal(req.method, "POST");
+        assert.equal(attrs.browser_origin, "https://demo.test");
+        assert.deepEqual(Object.keys(attrs).sort(), ["browser_origin", "client_ref_id"]);
+        return reply("otp_methods", selectedIdentifier, { method: "3DS", authenticationContext: {
+          launch_uri: "https://sandbox.src.mastercard.com/auth?origin=https%3A%2F%2Fdemo.test",
+          authentication_payload: { accountReference: { srcDigitalCardId: token }, srcCorrelationId: "test-correlation" },
+        } });
+      }
       verificationRef = `vgs:ms:v1:session-${++revision}`;
       const identifier = decodeURIComponent(req.url.slice(`${root}/otp/`.length));
       return reply("otp_methods", identifier, { method: "SMS", client_ref_id: verificationRef });
@@ -54,17 +64,6 @@ test("Mastercard ID&V through Express and Netlify: OTP and browser 3DS preparati
       }
       assert.equal(attrs.otp, "012345");
       return reply("otp_submissions", token, { status: "VALIDATED", authenticationContext: null });
-    }
-    if (req.url === `${root}/authentication-ui`) {
-      assert.equal(req.method, "POST");
-      assert.equal(body.data.type, "authentication_ui");
-      assert.equal(attrs.identifier, "vgs:ms:v1:browser-context");
-      assert.equal(attrs.browser_origin, "https://demo.test");
-      assert.deepEqual(Object.keys(attrs).sort(), ["browser_origin", "identifier"]);
-      return reply("authentication_ui", token, {
-        launch_uri: "https://sandbox.src.mastercard.com/auth?origin=https%3A%2F%2Fdemo.test",
-        authentication_payload: { accountReference: { srcDigitalCardId: token }, srcCorrelationId: "test-correlation" },
-      });
     }
     res.statusCode = 404;
     res.end(JSON.stringify({ error: "Unexpected upstream route" }));
@@ -97,7 +96,7 @@ test("Mastercard ID&V through Express and Netlify: OTP and browser 3DS preparati
     child.once("exit", (code) => { clearTimeout(timeout); reject(new Error(`Demo server exited: ${code}`)); });
   });
   Object.assign(process.env, env);
-  const handlers = Object.fromEntries(await Promise.all(["step-up-options", "otp", "authentication-ui"]
+  const handlers = Object.fromEntries(await Promise.all(["step-up-options", "otp"]
     .map(async (name) => [name, (await import(`../../netlify/functions/${name}.js`)).default])));
   const nativeFetch = globalThis.fetch;
   for (const adapter of ["Express", "Netlify"]) {
@@ -125,22 +124,24 @@ test("Mastercard ID&V through Express and Netlify: OTP and browser 3DS preparati
       });
     }
     await t.test(`${adapter} browser 3DS preparation`, async () => {
-      const body = { data: { type: "authentication_ui", attributes: {
-        identifier: "vgs:ms:v1:browser-context", browser_origin: "https://demo.test",
+      const identifier = "vgs:ms:v1:browser-context";
+      const body = { data: { type: "otp_methods", attributes: {
+        client_ref_id: originalRef, browser_origin: "https://demo.test",
       } } };
       const before = calls.length;
       const invoke = (payload) => {
-        const url = `/api/authentication-ui?tokenId=${encodeURIComponent(token)}`;
+        const url = `/api/otp/${encodeURIComponent(identifier)}?tokenId=${encodeURIComponent(token)}`;
         const options = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
         return adapter === "Express" ? nativeFetch(`http://127.0.0.1:${port}${url}`, options)
-          : handlers["authentication-ui"](new Request(`http://demo.test${url}`, options));
+          : handlers.otp(new Request(`http://demo.test${url}`, options));
       };
       const response = await invoke(body);
       assert.equal(response.status, 200);
       const prepared = (await response.json()).data;
-      assert.equal(prepared.id, token);
-      assert.equal(prepared.type, "authentication_ui");
-      assert.equal(prepared.attributes.authentication_payload.accountReference.srcDigitalCardId, token);
+      assert.equal(prepared.id, identifier);
+      assert.equal(prepared.type, "otp_methods");
+      assert.equal(prepared.attributes.method, "3DS");
+      assert.equal(prepared.attributes.authenticationContext.authentication_payload.accountReference.srcDigitalCardId, token);
       assert.deepEqual(calls[before].body, body);
       assert.equal(calls.length - before, 1, "Preparation must not send OTP or retry");
       assert.equal((await invoke({ data: { type: "otp_submissions", attributes: {} } })).status, 400);

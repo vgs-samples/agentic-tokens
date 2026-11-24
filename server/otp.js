@@ -19,13 +19,6 @@ export function getOtpOptions(tokenId, clientRefId) {
   return callOtpApi("GET", `/agentic-tokens/${encodeURIComponent(tokenId.trim())}/step-up-options?${query}`);
 }
 
-export function prepareAuthenticationUi(tokenId, body) {
-  if (!validToken(tokenId)) return { status: 400, data: { error: "tokenId required" } };
-  if (body?.data?.type !== "authentication_ui" || typeof body.data.attributes?.identifier !== "string"
-    || !body.data.attributes.identifier) return { status: 400, data: { error: "Valid verification parameters required" } };
-  return callOtpApi("POST", `/agentic-tokens/${encodeURIComponent(tokenId.trim())}/authentication-ui`, body);
-}
-
 export function sendOrVerifyOtp(tokenId, identifier, body) {
   if (!validToken(tokenId)) return { status: 400, data: { error: "tokenId required" } };
   const delivery = identifier !== undefined;

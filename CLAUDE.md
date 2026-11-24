@@ -29,16 +29,18 @@ a flow switch, and do not probe an endpoint to guess the flow.
 `agentic_enrollment_required` is independent of the verification value: it alone decides whether the
 **Complete Enrollment** step appears (Visa requires that call *after* verification, before any intent).
 
-All client-side ID&V transport and browser protocol code is deliberately isolated in
-**`client-react/src/idv.ts`** (plain fetch calls and the Mastercard popup lifecycle, no library dependency)
-so customers can read one file to understand the flow. Keep it
-that way: don't spread ID&V calls into components, and don't extend the auth library to cover this
-flow — the library exists for the Visa iframe/passkey lifecycle.
-Mastercard `3DS` uses its own hosted bank verification popup and does not create a passkey.
-`components/MastercardThreeDs.tsx` starts enrollment verification over `idv.ts` using
-the lookup identifier and browser origin/locale, without a merchant/acquiring/billing form.
+ID&V HTTP helpers and the demo proxy adapter live in **`client-react/src/idv.ts`**.
+All browser protocol handling belongs in **`vgs-agentic-auth.js`**: its common
+`VgsAgenticAuth.verify(...)` runs Visa iframe/FIDO or Mastercard 3DS popup verification,
+returns `{status, assuranceData, raw}`, and owns cancellation and cleanup.
+Keep `idv.ts` free of popup/postMessage lifecycle code. Its `verifyCardholder()`
+adapter injects the demo's `/api/otp` transport into the same SDK.
+`DeviceBinding.tsx` and `MastercardThreeDs.tsx` both call `verify(...)`; the application
+owns its OTP form through the Visa `onChallenge(session)` callback. Backend flow
+signals and lookup methods remain the source of truth; do not add a network/flow switch.
 Keep provider assurance data in memory, invalidate it on lookup/card/method/enrollment
 changes, and forward it on SCOF checkout as `assurance_data` for Mastercard validation.
+The browser flow creates no Mastercard passkey.
 
 The network is resolved at card creation — from the preset test card or, for a custom PAN, the brand Collect.js reports (`networkFromCardType` in `client-react/src/flow.ts`) — and authoritatively reconciled from the enroll response (`reconcileNetwork`). The active flow drives which step blocks render and their numbering — see `stepsFor` and `NETWORK_PHASES` in `flow.ts`. Mastercard test card: `2222690420064574`; Amex test card: `379258101671003`, CID `1111`, exp `12/27`.
 
@@ -85,8 +87,7 @@ All routes proxy to VGS APIs with a Bearer token. The two base URLs are `VGS_API
 | `POST /api/cards` | CMP — create test card |
 | `POST /api/cards/:cardId/agentic-tokens` | Enroll card for agentic payments |
 | `GET /api/step-up-options?tokenId=&clientRefId=` | ID&V — cardholder verification options (`clientRefId` required, URL-safe) |
-| `POST /api/authentication-ui?tokenId=` | Mastercard — prepare hosted browser 3DS verification |
-| `POST /api/otp/:identifier?tokenId=` | ID&V — deliver the one-time code via the chosen method |
+| `POST /api/otp/:identifier?tokenId=` | ID&V — deliver SMS/email OTP or return Mastercard 3DS `authenticationContext` |
 | `POST /api/otp?tokenId=` | ID&V — verify the code (completes verification) |
 | `POST /api/agentic-enrollments?tokenId=` | ID&V — finish enrollment after verification |
 | `POST /api/intents?tokenId=` | Create spending intent with mandates |
@@ -97,8 +98,8 @@ All routes proxy to VGS APIs with a Bearer token. The two base URLs are `VGS_API
 
 ## Key Details
 
-- The VGS SDK (`client-react/src/vgs-agentic-auth.js`) is vanilla JS loaded via dynamic `import()` in `DeviceBinding.tsx`. It handles the Visa iframe lifecycle, FIDO ceremony, and OTP flow. It is a copy of `client/vgs-agentic-auth.js` in the maranui repo and should stay byte-identical except for the sample-only visible-iframe sizing — if you need library behavior, change it there first.
-- The ID&V flow bypasses the SDK entirely: `src/idv.ts` (API calls) plus `components/CardholderIdv.tsx` and `components/CompleteEnrollment.tsx` (forms over it).
+- The VGS SDK (`client-react/src/vgs-agentic-auth.js`) is vanilla JS loaded via dynamic `import()` in `DeviceBinding.tsx`. It handles Visa iframe/FIDO/OTP and Mastercard 3DS popup verification through `verify(...)`. It is a copy of `client/vgs-agentic-auth.js` in the maranui repo and should stay byte-identical except for the sample-only visible-iframe sizing — if you need library behavior, change it there first.
+- ID&V uses `src/idv.ts` for HTTP/proxy adaptation and the SDK for browser verification. `CardholderIdv.tsx` and `CompleteEnrollment.tsx` own the forms and step progression.
 - Step lists are composed by `stepsFor(network, verification, agenticEnrollmentRequired)` in `flow.ts` rather than a fixed table, since the flow facts are independent. `useAppState` memoizes the result as `flow` and exposes it; `App.tsx` renders `flow.map(...)` over a `Record<StepKey, ReactNode>` of step blocks, so the step list is the only thing that decides order, numbering, and which steps exist. `useStepStatus` reads the same array.
 - App state lives in a single `useAppState` hook — step progression, loading states, and shared IDs (cardId, tokenId, intentId, assuranceData) flow down as props. `cardholderVerification` is `null` until the enroll response reports it.
 - Shared UI primitives (`Field`, `Row`, `Button`) are in `src/components/ui.tsx`. The `.input` Tailwind utility class is defined in `src/index.css`.

@@ -1,9 +1,13 @@
+import { VgsAgenticAuth } from "./vgs-agentic-auth.js";
+
+// Kept as low-level exports for existing demo consumers; browser handling lives in the SDK.
+export { launchThreeDs, readAuthenticationUiPreparation, readThreeDsResult } from "./vgs-agentic-auth.js";
+
 /**
  * Cardholder OTP flow over the Visa-compatible public contract.
  *
- * This is the whole client side of the ID&V flow, deliberately kept in one file with no
- * dependency on the VGS auth library. Visa obtains options with the first call; a provider
- * may instead return the same `stepUpRequest` shape with enrollment.
+ * HTTP helpers for ID&V. Browser verification delegates to the common VGS auth SDK.
+ * Methods come from lookup or the enrollment response's `stepUpRequest`.
  *
  *   1. getStepUpOptions()   — which methods are available (Mastercard, or Visa when not preloaded)
  *   2. requestOtp()         — send the code via the chosen method
@@ -17,12 +21,11 @@
  * API with server-side credentials — see `server/server.js`. Keep it that way in your own
  * integration: the browser never needs VGS credentials for this flow.
  *
- * The `clientRefId` ties the calls together. Visa clients generate it once with
- * `newClientRefId()`. Mastercard starts with `newClientRefId("mastercard")`, keeps that
- * lookup reference for delivery/resends, and uses the latest returned reference for verification.
- *
- * Contrast with the passkey flow (`vgs-agentic-auth.js` + `DeviceBinding.tsx`), where the
- * library manages a Visa iframe and returns `assuranceData` for intent creation.
+ * The enrollment's `clientRefId` ties the calls together. Preserve that reference for
+ * lookup and method selection, and use the newest session reference for OTP submission.
+ * `newClientRefId()` remains available for legacy callers.
+ * `verifyCardholder()` delegates browser verification to the shared SDK, which owns
+ * both the Visa iframe and Mastercard popup protocols.
  */
 
 /** One verification method offered for the token. */
@@ -99,11 +102,12 @@ export function isThreeDsMethod(m: OtpMethod): boolean {
 }
 
 /** Call this app's backend, which proxies to the VGS API. */
-async function call<T = unknown>(method: string, path: string, body?: object): Promise<T> {
+async function call<T = unknown>(method: string, path: string, body?: object, options: { signal?: AbortSignal } = {}): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`/api${path}`, {
       method,
+      signal: options.signal,
       headers: { "Content-Type": "application/json" },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
@@ -273,118 +277,18 @@ export interface AuthenticationUiPreparation {
   authentication_payload: Record<string, unknown>;
 }
 
-function authUiUrl(value: string, browserOrigin: string): URL {
-  const url = new URL(value);
-  if (url.protocol !== "https:" || !["sandbox.src.mastercard.com", "src.mastercard.com"].includes(url.hostname)
-    || url.port || url.username || url.password || url.pathname !== "/auth" || url.hash
-    || url.searchParams.get("origin") !== browserOrigin || [...url.searchParams.keys()].length !== 1) {
-    throw new IdvError("The API did not return a trusted Mastercard verification URL.");
-  }
-  return url;
-}
-
-export function readAuthenticationUiPreparation(body: unknown, tokenId: string, browserOrigin: string): AuthenticationUiPreparation {
-  const attrs = otpAttributes(body, "authentication_ui", tokenId);
-  const payload = attrs.authentication_payload;
-  if (typeof attrs.launch_uri !== "string" || !record(payload)
-    || !record(payload.accountReference) || payload.accountReference.srcDigitalCardId !== tokenId
-    || !record(payload.authenticationMethod) || payload.authenticationMethod.authenticationMethodType !== "3DS"
-    || payload.authenticationMethod.authenticationSubject !== "CARDHOLDER"
-    || typeof payload.srcCorrelationId !== "string" || !payload.srcCorrelationId
-    || typeof payload.traceId !== "string" || !payload.traceId) {
-    throw new IdvError("Mastercard verification preparation does not match this card.");
-  }
-  authUiUrl(attrs.launch_uri, browserOrigin);
-  return { launch_uri: attrs.launch_uri, authentication_payload: payload };
-}
-
-/** Browser validation is a demo flow decision; Mastercard validates the proof at checkout. */
-export function readThreeDsResult(value: unknown, prepared: AuthenticationUiPreparation): Record<string, unknown> {
-  const expected = prepared.authentication_payload;
-  if (!record(value) || value.srcCorrelationId !== expected.srcCorrelationId
-    || (value.traceId != null && value.traceId !== expected.traceId)
-    || (expected.srciTransactionId != null && value.srciTransactionId !== expected.srciTransactionId)
-    || (record(value.accountReference) && record(expected.accountReference)
-      && value.accountReference.srcDigitalCardId !== expected.accountReference.srcDigitalCardId)) {
-    throw new IdvError("Mastercard returned a mismatched verification result. Start a new verification.");
-  }
-  if (value.authenticationStatus !== "COMPLETE" || value.authenticationResult !== "AUTHENTICATED") {
-    throw new IdvError("Bank verification was not completed successfully. You can try again.");
-  }
-  const assurance = value.assuranceData;
-  if (!record(assurance) || !Array.isArray(assurance.verificationData)
-    || !assurance.verificationData.every(record) || !assurance.verificationData.some((proof) =>
-      proof.verificationType === "CARDHOLDER" && proof.verificationEntity === "03" && proof.verificationMethod === "01"
-      && proof.verificationResults === "01" && typeof proof.additionalData === "string" && proof.additionalData.trim())) {
-    throw new IdvError("Mastercard did not return a successful 3DS verification proof.");
-  }
-  return assurance;
-}
-
-type PopupHost = Pick<Window, "open" | "addEventListener" | "removeEventListener" | "setTimeout" | "clearTimeout" | "setInterval" | "clearInterval">;
-
-/** Open before awaiting preparation so browsers recognize the user's click. */
-export function launchThreeDs(
-  host: PopupHost, prepare: () => Promise<AuthenticationUiPreparation>, browserOrigin: string,
-  onExchange: (message: unknown) => void,
-): { result: Promise<{ raw: unknown; assuranceData: Record<string, unknown> }>; cancel: () => void } {
-  const popup = host.open("about:blank", "_blank", "popup,width=480,height=720");
-  if (!popup) throw new IdvError("Allow popups for this site to open bank verification.");
-  let settled = false;
-  let initialized = false;
-  let preparation: AuthenticationUiPreparation | undefined;
-  let expectedOrigin = "";
-  let resolveResult: (value: { raw: unknown; assuranceData: Record<string, unknown> }) => void;
-  let rejectResult: (error: Error) => void;
-  const result = new Promise<{ raw: unknown; assuranceData: Record<string, unknown> }>((resolve, reject) => {
-    resolveResult = resolve; rejectResult = reject;
+/** Common SDK entry point; this adapter only maps canonical API paths to the demo proxy. */
+export function verifyCardholder(
+  tokenId: string, clientRefId: string, method: OtpMethod,
+  options: { signal?: AbortSignal; onExchange?: (message: unknown) => void; browser?: ThreeDsInput } = {},
+) {
+  const flow = new VgsAgenticAuth({
+    tokenId, clientRefId, environment: import.meta.env?.VITE_DEFAULT_ENVIRONMENT || "sandbox",
+    request: (verb: string, path: string, body: object, transport: { signal?: AbortSignal }) => {
+      const prefix = `/agentic-tokens/${encodeURIComponent(tokenId)}/otp/`;
+      if (verb !== "POST" || !path.startsWith(prefix)) throw new IdvError("Unsupported verification request.");
+      return call(verb, `/otp/${path.slice(prefix.length)}?tokenId=${encodeURIComponent(tokenId)}`, body, transport);
+    },
   });
-  function finish(error?: Error, value?: { raw: unknown; assuranceData: Record<string, unknown> }) {
-    if (settled) return;
-    settled = true;
-    host.removeEventListener("message", onMessage);
-    host.clearInterval(closedTimer); host.clearTimeout(timeoutTimer);
-    if (!popup!.closed) popup!.close();
-    if (error) rejectResult(error); else resolveResult(value!);
-  }
-  function onMessage(event: MessageEvent) {
-    if (settled || !preparation || event.source !== popup || event.origin !== expectedOrigin || !record(event.data)) return;
-    if (event.data.action === "Ready" && !initialized) {
-      initialized = true;
-      const message = { action: "Authenticate", payload: preparation.authentication_payload };
-      try { popup!.postMessage(message, expectedOrigin); onExchange(message); }
-      catch { finish(new IdvError("Could not initialize Mastercard verification.")); }
-    } else if (initialized && ["Success", "Error"].includes(String(event.data.action))) {
-      onExchange(event.data);
-      if (event.data.action === "Error") { finish(new IdvError("Mastercard verification failed. See the provider response.")); return; }
-      try { finish(undefined, { raw: event.data.payload, assuranceData: readThreeDsResult(event.data.payload, preparation) }); }
-      catch (error) { finish(error instanceof Error ? error : new IdvError("Invalid bank verification result.")); }
-    }
-  }
-  host.addEventListener("message", onMessage);
-  const closedTimer = host.setInterval(() => {
-    if (popup.closed) finish(new IdvError("The bank verification window was closed. You can try again."));
-  }, 500);
-  const timeoutTimer = host.setTimeout(() => finish(new IdvError("Bank verification timed out. You can try again.")), 600000);
-  void (async () => {
-    try {
-      const prepared = await prepare();
-      if (settled) return;
-      const url = authUiUrl(prepared.launch_uri, browserOrigin);
-      preparation = prepared; expectedOrigin = url.origin;
-      popup.location.replace(url.href);
-    } catch (error) { finish(error instanceof Error ? error : new IdvError("Could not prepare bank verification.")); }
-  })();
-  return { result, cancel: () => finish(new IdvError("Bank verification was cancelled.")) };
-}
-
-export async function prepareThreeDs(tokenId: string, identifier: string, input: ThreeDsInput = {}): Promise<AuthenticationUiPreparation> {
-  const origin = window.location.origin;
-  const body = await call("POST", `/authentication-ui?tokenId=${encodeURIComponent(tokenId)}`, {
-    data: { type: "authentication_ui", attributes: {
-      ...input, identifier, browser_origin: origin,
-      dpa_locale: /^[a-z]{2}[-_][a-z]{2}$/i.test(navigator.language) ? navigator.language.replace("-", "_") : "en_US",
-    } },
-  });
-  return readAuthenticationUiPreparation(body, tokenId, origin);
+  return flow.verify({ method, ...options });
 }
