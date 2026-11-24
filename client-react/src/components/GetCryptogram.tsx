@@ -94,7 +94,10 @@ export function GetCryptogram() {
               },
               user_sign_off: userSignOff,
               partner_delegated_signoff: { partner_step_up_method: partnerMethod },
-            } : { merchant_name: cardScopedMerchant }),
+            } : { merchant_name: cardScopedMerchant,
+              ...(state.mastercardAssuranceData && state.otpVerifiedTokenId === state.tokenId
+                ? { assurance_data: state.mastercardAssuranceData } : {}),
+            }),
           }
         : {
             transaction_data: [{

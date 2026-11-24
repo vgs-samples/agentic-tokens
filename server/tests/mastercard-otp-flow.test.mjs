@@ -10,7 +10,7 @@ import { getStepUpOptions, requestOtp, submitOtp, readOtpDelivery, readOtpVerifi
 
 // Real demo HTTP routes plus frontend builders/parsers; only Maranui is simulated.
 // All URLs and credentials are local test fixtures.
-test("SMS and email through Express and Netlify: lookup, delivery, rejected code, pending, verification and resend", async (t) => {
+test("Mastercard ID&V through Express and Netlify: OTP and browser 3DS preparation", async (t) => {
   const calls = [];
   const token = "synthetic-token";
   const originalRef = "vgs:ms:v1:test-attempt";
@@ -37,6 +37,16 @@ test("SMS and email through Express and Netlify: lookup, delivery, rejected code
     if (req.url.startsWith(`${root}/otp/`)) {
       assert.equal(attrs.client_ref_id, originalRef, "Delivery and resend must use the lookup reference");
       assert.equal(body.data.type, "otp_methods");
+      const selectedIdentifier = decodeURIComponent(req.url.slice(`${root}/otp/`.length));
+      if (selectedIdentifier === "vgs:ms:v1:browser-context") {
+        assert.equal(req.method, "POST");
+        assert.equal(attrs.browser_origin, "https://demo.test");
+        assert.deepEqual(Object.keys(attrs).sort(), ["browser_origin", "client_ref_id"]);
+        return reply("otp_methods", selectedIdentifier, { method: "3DS", authenticationContext: {
+          launch_uri: "https://sandbox.src.mastercard.com/auth?origin=https%3A%2F%2Fdemo.test",
+          authentication_payload: { accountReference: { srcDigitalCardId: token }, srcCorrelationId: "test-correlation" },
+        } });
+      }
       verificationRef = `vgs:ms:v1:session-${++revision}`;
       const identifier = decodeURIComponent(req.url.slice(`${root}/otp/`.length));
       return reply("otp_methods", identifier, { method: "SMS", client_ref_id: verificationRef });
@@ -113,5 +123,29 @@ test("SMS and email through Express and Netlify: lookup, delivery, rejected code
         assert.equal(calls.length - before, 6, "No implicit retries or duplicate sends");
       });
     }
+    await t.test(`${adapter} browser 3DS preparation`, async () => {
+      const identifier = "vgs:ms:v1:browser-context";
+      const body = { data: { type: "otp_methods", attributes: {
+        client_ref_id: originalRef, browser_origin: "https://demo.test",
+      } } };
+      const before = calls.length;
+      const invoke = (payload) => {
+        const url = `/api/otp/${encodeURIComponent(identifier)}?tokenId=${encodeURIComponent(token)}`;
+        const options = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
+        return adapter === "Express" ? nativeFetch(`http://127.0.0.1:${port}${url}`, options)
+          : handlers.otp(new Request(`http://demo.test${url}`, options));
+      };
+      const response = await invoke(body);
+      assert.equal(response.status, 200);
+      const prepared = (await response.json()).data;
+      assert.equal(prepared.id, identifier);
+      assert.equal(prepared.type, "otp_methods");
+      assert.equal(prepared.attributes.method, "3DS");
+      assert.equal(prepared.attributes.authenticationContext.authentication_payload.accountReference.srcDigitalCardId, token);
+      assert.deepEqual(calls[before].body, body);
+      assert.equal(calls.length - before, 1, "Preparation must not send OTP or retry");
+      assert.equal((await invoke({ data: { type: "otp_submissions", attributes: {} } })).status, 400);
+      assert.equal(calls.length - before, 1, "Invalid parameters must not reach Maranui");
+    });
   }
 });

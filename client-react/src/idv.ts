@@ -1,9 +1,13 @@
+import { VgsAgenticAuth } from "./vgs-agentic-auth.js";
+
+// Kept as low-level exports for existing demo consumers; browser handling lives in the SDK.
+export { launchThreeDs, readAuthenticationUiPreparation, readThreeDsResult } from "./vgs-agentic-auth.js";
+
 /**
  * Cardholder OTP flow over the Visa-compatible public contract.
  *
- * This is the whole client side of the ID&V flow, deliberately kept in one file with no
- * dependency on the VGS auth library. Visa obtains options with the first call; a provider
- * may instead return the same `stepUpRequest` shape with enrollment.
+ * HTTP helpers for ID&V. Browser verification delegates to the common VGS auth SDK.
+ * Methods come from lookup or the enrollment response's `stepUpRequest`.
  *
  *   1. getStepUpOptions()   — which methods are available (Mastercard, or Visa when not preloaded)
  *   2. requestOtp()         — send the code via the chosen method
@@ -17,12 +21,11 @@
  * API with server-side credentials — see `server/server.js`. Keep it that way in your own
  * integration: the browser never needs VGS credentials for this flow.
  *
- * The `clientRefId` ties the calls together. Visa clients generate it once with
- * `newClientRefId()`. Mastercard starts with `newClientRefId("mastercard")`, keeps that
- * lookup reference for delivery/resends, and uses the latest returned reference for verification.
- *
- * Contrast with the passkey flow (`vgs-agentic-auth.js` + `DeviceBinding.tsx`), where the
- * library manages a Visa iframe and returns `assuranceData` for intent creation.
+ * The enrollment's `clientRefId` ties the calls together. Preserve that reference for
+ * lookup and method selection, and use the newest session reference for OTP submission.
+ * `newClientRefId()` remains available for legacy callers.
+ * `verifyCardholder()` delegates browser verification to the shared SDK, which owns
+ * both the Visa iframe and Mastercard popup protocols.
  */
 
 /** One verification method offered for the token. */
@@ -33,6 +36,8 @@ export interface OtpMethod {
   identifier: string;
   /** Masked destination, safe to show the cardholder (e.g. "**PSMS"). */
   value?: string;
+  /** Browser verification methods additionally carry the provider's launch URI. */
+  uriData?: { uri: string; uriType: string };
 }
 
 /** Result of step 1. */
@@ -45,7 +50,7 @@ export interface StepUpOptions {
    * and you should use the library instead.
    */
   passkeyRequired: boolean;
-  /** Offered methods, filtered to real OTP methods (see isOtpMethod). */
+  /** Executable OTP methods, plus Mastercard browser 3DS when offered. */
   methods: OtpMethod[];
   /** Raw response, for display/debugging. */
   raw: unknown;
@@ -91,12 +96,18 @@ export function isOtpMethod(m: OtpMethod): boolean {
     && typeof m.identifier === "string" && Boolean(m.identifier);
 }
 
+export function isThreeDsMethod(m: OtpMethod): boolean {
+  return Boolean(m) && m.method === "3DS" && typeof m.identifier === "string" && Boolean(m.identifier)
+    && m.uriData?.uriType === "WEB_URI" && typeof m.uriData.uri === "string";
+}
+
 /** Call this app's backend, which proxies to the VGS API. */
-async function call<T = unknown>(method: string, path: string, body?: object): Promise<T> {
+async function call<T = unknown>(method: string, path: string, body?: object, options: { signal?: AbortSignal } = {}): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`/api${path}`, {
       method,
+      signal: options.signal,
       headers: { "Content-Type": "application/json" },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
@@ -140,7 +151,8 @@ export async function getStepUpOptions(tokenId: string, clientRefId: string): Pr
     status: attrs.status,
     // Absent means "run the passkey" — only an explicit false is the ID&V flow.
     passkeyRequired: attrs.passkey_required !== false,
-    methods: Array.isArray(attrs.stepUpRequest) ? attrs.stepUpRequest.filter(isOtpMethod) : [],
+    methods: Array.isArray(attrs.stepUpRequest) ? attrs.stepUpRequest.filter((m) =>
+      isOtpMethod(m) || (clientRefId.startsWith("vgs:ms:") && isThreeDsMethod(m))) : [],
     raw: data,
   };
 }
@@ -248,6 +260,35 @@ export function readOtpVerification(body: unknown, tokenId: string, currentRef: 
 }
 
 export function otpMethodLabel(method: OtpMethod): string {
-  const label = ({ OTPSMS: "SMS", OTPEMAIL: "Email" } as Record<string, string>)[method.method] ?? method.method;
+  const label = ({ OTPSMS: "SMS", OTPEMAIL: "Email", "3DS": "3DS — Verify with your bank" } as Record<string, string>)[method.method] ?? method.method;
   return method.value ? `${label} — ${method.value}` : label;
+}
+
+export interface ThreeDsInput {
+  acquirer_merchant_id?: string;
+  acquirer_bin?: string;
+  merchant_name?: string;
+  billing_address?: { zip: string; country_code: string; line1?: string };
+  force_challenge?: boolean;
+}
+
+export interface AuthenticationUiPreparation {
+  launch_uri: string;
+  authentication_payload: Record<string, unknown>;
+}
+
+/** Common SDK entry point; this adapter only maps canonical API paths to the demo proxy. */
+export function verifyCardholder(
+  tokenId: string, clientRefId: string, method: OtpMethod,
+  options: { signal?: AbortSignal; onExchange?: (message: unknown) => void; browser?: ThreeDsInput } = {},
+) {
+  const flow = new VgsAgenticAuth({
+    tokenId, clientRefId, environment: import.meta.env?.VITE_DEFAULT_ENVIRONMENT || "sandbox",
+    request: (verb: string, path: string, body: object, transport: { signal?: AbortSignal }) => {
+      const prefix = `/agentic-tokens/${encodeURIComponent(tokenId)}/otp/`;
+      if (verb !== "POST" || !path.startsWith(prefix)) throw new IdvError("Unsupported verification request.");
+      return call(verb, `/otp/${path.slice(prefix.length)}?tokenId=${encodeURIComponent(tokenId)}`, body, transport);
+    },
+  });
+  return flow.verify({ method, ...options });
 }

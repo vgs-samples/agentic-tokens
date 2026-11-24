@@ -37,6 +37,7 @@ export interface AppState {
   otpVerifiedTokenId: string | null;
   intentId: string | null;
   assuranceData: unknown[] | null;
+  mastercardAssuranceData: Record<string, unknown> | null;
   /** Resolved card network — drives which steps are shown. Defaults to visa. */
   network: Network;
   /**
@@ -67,6 +68,7 @@ function initialState(): AppState {
     otpVerifiedTokenId: null,
     intentId: null,
     assuranceData: null,
+    mastercardAssuranceData: null,
     network: DEFAULT_NETWORK,
     cardholderVerification: null,
     agenticEnrollmentRequired: false,

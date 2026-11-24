@@ -26,7 +26,7 @@ export function OtpOptions() {
     setState((s) => {
       const completedSteps = new Set(s.completedSteps);
       for (const step of ["otpOptions", "idv", "cryptogram"] as const) completedSteps.delete(step);
-      return { ...s, completedSteps, otpContext: null, otpVerifiedTokenId: null };
+      return { ...s, completedSteps, otpContext: null, otpVerifiedTokenId: null, mastercardAssuranceData: null };
     });
     log(`Step ${num}: Getting verification options...`);
     try {
@@ -52,12 +52,12 @@ export function OtpOptions() {
   }
 
   return <Step stepKey="otpOptions" title="Get Verification Options" response={response}>
-    <p className="text-sm text-gray-500">Find the SMS or email options available for this card.</p>
+    <p className="text-sm text-gray-500">Find the bank verification methods available for this card, including SMS, email and 3DS.</p>
     <Button onClick={getOptions} disabled={loading || state.loadingSteps.size > 0 || !state.tokenId || !state.completedSteps.has("enroll")}>
       {loading ? "Getting options…" : state.otpContext ? "Refresh Options" : "Get Verification Options"}
     </Button>
     {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-    {empty && <p role="status" className="text-sm text-amber-700">No SMS or email options are available. Verification has not been completed.</p>}
+    {empty && <p role="status" className="text-sm text-amber-700">No supported verification methods are available. Verification has not been completed.</p>}
     {state.otpContext && <>
       <p className="text-sm text-gray-600">{state.otpContext.methods.map(otpMethodLabel).join(" · ")}</p>
       <Button variant="secondary" onClick={() => goToStep("idv")} disabled={state.loadingSteps.size > 0}>Continue to Verification</Button>
