@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getStepUpOptions, launchThreeDs, readAuthenticationUiPreparation, readThreeDsResult } from "../src/idv.ts";
+import { getStepUpOptions, launchThreeDs, prepareThreeDs, readAuthenticationUiPreparation, readThreeDsResult } from "../src/idv.ts";
 
 const origin = "https://localhost:4200";
 const mcOrigin = "https://sandbox.src.mastercard.com";
@@ -17,6 +17,24 @@ const proof = { verificationType: "CARDHOLDER", verificationEntity: "03", verifi
 const success = { srcCorrelationId: "lookup-correlation", traceId: "lookup-affinity",
   authenticationStatus: "COMPLETE", authenticationResult: "AUTHENTICATED", assuranceData: { verificationData: [proof], eci: "02" } };
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test("enrollment 3DS preparation needs no merchant, acquiring or billing input", async (t) => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { origin } } });
+  t.after(() => {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else delete globalThis.window;
+  });
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    assert.equal(url, "/api/authentication-ui?tokenId=enrolled-token");
+    assert.deepEqual(JSON.parse(options.body), { data: { type: "authentication_ui", attributes: {
+      identifier: "lookup-identifier", browser_origin: origin,
+      dpa_locale: /^[a-z]{2}[-_][a-z]{2}$/i.test(navigator.language) ? navigator.language.replace("-", "_") : "en_US",
+    } } });
+    return Response.json({ data: { id: "enrolled-token", type: "authentication_ui", attributes: prepared } });
+  });
+  assert.deepEqual(await prepareThreeDs("enrolled-token", "lookup-identifier"), prepared);
+});
 
 function browser(blocked = false) {
   const listeners = new Set();

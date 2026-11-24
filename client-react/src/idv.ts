@@ -261,10 +261,10 @@ export function otpMethodLabel(method: OtpMethod): string {
 }
 
 export interface ThreeDsInput {
-  acquirer_merchant_id: string;
-  acquirer_bin: string;
-  merchant_name: string;
-  billing_address: { zip: string; country_code: string; line1?: string };
+  acquirer_merchant_id?: string;
+  acquirer_bin?: string;
+  merchant_name?: string;
+  billing_address?: { zip: string; country_code: string; line1?: string };
   force_challenge?: boolean;
 }
 
@@ -378,7 +378,7 @@ export function launchThreeDs(
   return { result, cancel: () => finish(new IdvError("Bank verification was cancelled.")) };
 }
 
-export async function prepareThreeDs(tokenId: string, identifier: string, input: ThreeDsInput): Promise<AuthenticationUiPreparation> {
+export async function prepareThreeDs(tokenId: string, identifier: string, input: ThreeDsInput = {}): Promise<AuthenticationUiPreparation> {
   const origin = window.location.origin;
   const body = await call("POST", `/authentication-ui?tokenId=${encodeURIComponent(tokenId)}`, {
     data: { type: "authentication_ui", attributes: {

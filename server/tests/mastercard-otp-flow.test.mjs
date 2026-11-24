@@ -60,7 +60,7 @@ test("Mastercard ID&V through Express and Netlify: OTP and browser 3DS preparati
       assert.equal(body.data.type, "authentication_ui");
       assert.equal(attrs.identifier, "vgs:ms:v1:browser-context");
       assert.equal(attrs.browser_origin, "https://demo.test");
-      assert.equal(attrs.billing_address.country_code, "US");
+      assert.deepEqual(Object.keys(attrs).sort(), ["browser_origin", "identifier"]);
       return reply("authentication_ui", token, {
         launch_uri: "https://sandbox.src.mastercard.com/auth?origin=https%3A%2F%2Fdemo.test",
         authentication_payload: { accountReference: { srcDigitalCardId: token }, srcCorrelationId: "test-correlation" },
@@ -127,8 +127,6 @@ test("Mastercard ID&V through Express and Netlify: OTP and browser 3DS preparati
     await t.test(`${adapter} browser 3DS preparation`, async () => {
       const body = { data: { type: "authentication_ui", attributes: {
         identifier: "vgs:ms:v1:browser-context", browser_origin: "https://demo.test",
-        acquirer_merchant_id: "merchant", acquirer_bin: "123456", merchant_name: "Demo",
-        billing_address: { zip: "10001", country_code: "US" },
       } } };
       const before = calls.length;
       const invoke = (payload) => {

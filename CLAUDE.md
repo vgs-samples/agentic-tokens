@@ -35,7 +35,8 @@ so customers can read one file to understand the flow. Keep it
 that way: don't spread ID&V calls into components, and don't extend the auth library to cover this
 flow — the library exists for the Visa iframe/passkey lifecycle.
 Mastercard `3DS` uses its own hosted bank verification popup and does not create a passkey.
-`components/MastercardThreeDs.tsx` supplies the acquiring/billing form over `idv.ts`.
+`components/MastercardThreeDs.tsx` starts enrollment verification over `idv.ts` using
+the lookup identifier and browser origin/locale, without a merchant/acquiring/billing form.
 Keep provider assurance data in memory, invalidate it on lookup/card/method/enrollment
 changes, and forward it on SCOF checkout as `assurance_data` for Mastercard validation.
 

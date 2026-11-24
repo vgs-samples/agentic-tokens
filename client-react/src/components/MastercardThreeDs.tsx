@@ -1,18 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { launchThreeDs, prepareThreeDs } from "../idv";
 import { useAppState } from "../useAppState";
-import { Button, Field, Row } from "./ui";
+import { Button } from "./ui";
 
 export function MastercardThreeDs({ identifier, onStart, onResponse, onError }: {
   identifier: string; onStart: () => void; onResponse: (body: unknown) => void; onError: (error: unknown) => void;
 }) {
   const { state, setState, setLoading, completeStep, log } = useAppState();
-  const [merchantId, setMerchantId] = useState("");
-  const [bin, setBin] = useState("");
-  const [merchant, setMerchant] = useState("");
-  const [zip, setZip] = useState("");
-  const [country, setCountry] = useState("US");
-  const [line1, setLine1] = useState("");
   const [active, setActive] = useState(false);
   const flow = useRef<ReturnType<typeof launchThreeDs> | null>(null);
   const mounted = useRef(true);
@@ -28,10 +22,8 @@ export function MastercardThreeDs({ identifier, onStart, onResponse, onError }: 
     onStart();
     setLoading("idv", true);
     try {
-      flow.current = launchThreeDs(window, () => prepareThreeDs(tokenId, identifier, {
-        acquirer_merchant_id: merchantId.trim(), acquirer_bin: bin.trim(), merchant_name: merchant.trim(),
-        billing_address: { zip: zip.trim(), country_code: country.trim().toUpperCase(), ...(line1.trim() ? { line1: line1.trim() } : {}) },
-      }), window.location.origin, (message) => { if (mounted.current) onResponse(message); });
+      flow.current = launchThreeDs(window, () => prepareThreeDs(tokenId, identifier),
+        window.location.origin, (message) => { if (mounted.current) onResponse(message); });
       setActive(true);
       const result = await flow.current.result;
       if (!mounted.current) return;
@@ -46,23 +38,8 @@ export function MastercardThreeDs({ identifier, onStart, onResponse, onError }: 
   }
 
   return <div className="mt-3">
-    <p className="text-sm text-gray-500">Your bank will verify the card in a secure Mastercard window.
-      Use the acquiring identifiers assigned during your Mastercard onboarding.</p>
-    <fieldset disabled={busy}>
-      <Row>
-        <Field label="Acquirer merchant ID"><input className="input" value={merchantId} onChange={(e) => setMerchantId(e.target.value)} /></Field>
-        <Field label="Acquirer BIN"><input className="input" value={bin} onChange={(e) => setBin(e.target.value)} /></Field>
-      </Row>
-      <Field label="Registered merchant name"><input className="input" value={merchant} onChange={(e) => setMerchant(e.target.value)} /></Field>
-      <Field label="Billing address (optional)"><input className="input" value={line1} onChange={(e) => setLine1(e.target.value)} /></Field>
-      <Row>
-        <Field label="Billing postal code"><input className="input" value={zip} onChange={(e) => setZip(e.target.value)} /></Field>
-        <Field label="Billing country"><input className="input" maxLength={2} value={country} onChange={(e) => setCountry(e.target.value.toUpperCase())} /></Field>
-      </Row>
-      <Button onClick={start} disabled={busy || !merchantId.trim() || !bin.trim() || !merchant.trim() || !zip.trim() || country.trim().length !== 2}>
-        Verify with Bank (3DS)
-      </Button>
-    </fieldset>
+    <p className="text-sm text-gray-500">Your bank will verify the card in a secure Mastercard window.</p>
+    <Button onClick={start} disabled={busy}>Verify with Bank (3DS)</Button>
     {active && <Button variant="secondary" onClick={() => flow.current?.cancel()}>Cancel Verification</Button>}
   </div>;
 }

@@ -86,9 +86,9 @@ context errors offer **Get New Verification Options**. There are no automatic
 OTP retries. Verification state lives only in browser memory.
 
 When Mastercard offers **3DS**, select **3DS — Verify with your bank** instead.
-Enter the acquiring merchant ID/BIN assigned during Mastercard onboarding, the
-registered merchant name, and the cardholder's billing postal code/country.
-Press **Verify with Bank (3DS)** and allow the Mastercard popup. The demo waits
+Press **Verify with Bank (3DS)** and allow the Mastercard popup. Enrollment
+preparation uses the lookup identifier, page origin and browser locale; it does
+not ask for merchant/acquiring identifiers or billing details. The demo waits
 for a matching successful authentication and positive 3DS proof; closing or
 cancelling the popup does not complete verification. No passkey is created.
 The returned provider assurance data stays in memory and accompanies the next
